@@ -152,6 +152,26 @@ async function dispatch(context, request, state, domain) {
     check(replies.every(r => r.result === 0), 'Foreign thread cancellation was rejected');
     return replies;
   }
+  if (command === 'socket-test') {
+    // Run the raw socket chain on the app's main thread (the context the console
+    // shim already uses). A main-thread success with a worker crash means the
+    // worker thread's socket path is the problem; a main-thread crash means the
+    // offset is wrong.
+    const scratch = s.base + 0x1000;
+    const sa = Buffer.alloc(16);
+    sa[0] = 2; sa.writeUInt16BE(Number(request.port || 39401), 2);
+    sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
+    await s.write(scratch, sa);
+    const payload = Buffer.from('SEEDSOW-MAIN-TEST\n');
+    await s.write(scratch + 0x100, payload);
+    const connectOffset = Number(request.connect || SOCK.connect);
+    const fd = await s.rpc.call3(live.sdk + SOCK.socket, 2, 1, 0, 0);
+    const connected = await s.rpc.call3(live.sdk + connectOffset, fd, scratch, 16, 0);
+    const sent = await s.rpc.call3(live.sdk + SOCK.send, fd, scratch + 0x100, payload.length, 0);
+    const closed = await s.rpc.call3(live.sdk + SOCK.close, fd, 0, 0, 0);
+    return {fd: Number(fd), connect: Number(connected), send: Number(sent),
+      close: Number(closed), connectOffset};
+  }
   if (command === 'worker-prepare') {
     const workerSlot = Number(request.slot || 1);
     check(workerSlot === 1 || workerSlot === 2, 'Only worker slots 1 and 2 are supported');

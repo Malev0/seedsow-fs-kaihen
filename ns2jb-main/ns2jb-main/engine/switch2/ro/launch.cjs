@@ -272,6 +272,25 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, Number(process.env.NS2_GATE_UNPARK_SETTLE_MS || 300)));
       proof.armed = await gate.inspect(false); await save();
       console.log(JSON.stringify({stage: 'launch-armed', file, armed: proof.armed}));
+      if (process.env.NS2_LAUNCH_SOCKET_MAIN === '1') {
+        // Diagnostic: run the raw socket chain on the app's main thread before
+        // any worker exists. If this connects, the offset and the network path
+        // are good and the worker thread is the remaining variable. Try both
+        // connect overloads; a crash on the first one ends the loop.
+        proof.socketMain = [];
+        for (const candidate of [0x14d3d0, 0x14d3c0]) {
+          const row = {pcAddress: dumpHost(), port: Number(process.env.NS2_DUMP_PORT || 39401),
+            connect: candidate};
+          try {
+            Object.assign(row, await memory.request({command: 'root-native-socket-test',
+              pcAddress: row.pcAddress, port: row.port, connect: candidate}));
+          } catch (error) { row.error = error.message; }
+          proof.socketMain.push(row);
+          await save();
+          if (row.error) break;
+        }
+        throw Error('Socket main-thread diagnostic complete; see proof.socketMain');
+      }
       const watch = process.env.NS2_LAUNCH_WAIT_ONLY === '1' || process.env.NS2_LAUNCH_WATCH === '1';
       if (process.env.NS2_LAUNCH_TCP_TEST === '1') {
         // Pure socket probe before the launch: no FS read, just connect/send a
