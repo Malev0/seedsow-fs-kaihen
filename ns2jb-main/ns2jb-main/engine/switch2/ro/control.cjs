@@ -58,7 +58,7 @@ async function dispatch(context, request) {
     return require("./files.cjs").dispatch(context, request, state, domain);
   if (command === 'ncm-list-system')
     return require("./ncm.cjs").listSystem(context, request, state);
-  if (command.startsWith('worker-'))
+  if (command.startsWith('worker-') || command === 'socket-test')
     return require("./worker-control.cjs").dispatch(context, request, state, domain);
   if (command.startsWith('process-test-'))
     return require("./process-test.cjs").dispatch(context, request, state);
