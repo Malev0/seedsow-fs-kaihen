@@ -4,39 +4,23 @@ const check = (ok, message) => { if (!ok) throw Error(message); };
 // Seedsow CancelSynchronization veneer (svc #0x19); SmileBASIC used 0x158414.
 const cancelCode = {offset: 0x168c0c, bytes: '210300d4c0035fd6'};
 
-// The console shim's raw 0xb29000 GOT layer has known-good socket/send/close
-// stubs (core_dump.txt offsets_sdk), but no named connect entry. The public
-// nn::socket exports (0x94DD0 etc.) use the 0xb26000 GOT layer, which is not
-// initialized in this process: calling them from a worker crashes the app.
-// So keep the raw stubs and resolve the raw connect at runtime: read both
-// resolved GOT pages and pick the 0xb29000 slot that points at the same
-// implementation as the public connect slot (0xb26000 + 0xb20).
+// The console shim's raw 0xb29000 GOT layer is the one this process uses. Its
+// socket/send/close stubs are known-good (core_dump.txt offsets_sdk). connect is
+// not in that table, but it is the standard nn::socket Connect overload:
+//   veneer 0x14d3d0 -> GOT slot 0x108 -> sdk + 0x155890
+// Verified against the live GOT and sdk.text: the function takes
+// (fd, sockaddr*, len), copies the sockaddr into the request, and calls the
+// vtable method at +0x90 (Bind is the +0x88 pair, whose standard entry 0x14d3b0
+// -> 0x155510 has the same shape). The public 0x94DD0 export is a different
+// layer (0xb26000 GOT / main module) and crashes the worker.
 // Do not use shared/sdk-functions.json's socket/connect/closeSocket offsets:
 // those signatures belong to a different build (0x140C50 is mid-function here).
 const SOCK = {
   socket: 0x14d4c0,
+  connect: 0x14d3d0,
   send: 0x14d350,
   close: 0x14d510,
 };
-const GOT_RAW = 0xb29000, GOT_PUBLIC = 0xb26000;
-const STUB_RAW = 0x5eba50;                 // raw stub for GOT slot 0
-const PUBLIC_CONNECT_SLOT = 0xb20, PUBLIC_SOCKET_SLOT = 0xb60;
-
-async function resolveConnect(s, sdk) {
-  const raw = await s.read(sdk + GOT_RAW, 0x1000);
-  const pub = await s.read(sdk + GOT_PUBLIC, 0x1000);
-  const target = pub.readBigUInt64LE(PUBLIC_CONNECT_SLOT);
-  check(target !== 0n, 'Public connect GOT slot is unresolved');
-  const slots = [];
-  for (let slot = 0; slot < 0x1000; slot += 8)
-    if (raw.readBigUInt64LE(slot) === target) slots.push(slot);
-  check(slots.length === 1, `Raw connect GOT slot: expected 1 match, found ${slots.length}`);
-  return {
-    stub: STUB_RAW + (slots[0] / 8) * 0x10,
-    slot: slots[0],
-    socketLayerMatches: raw.readBigUInt64LE(0x1b0) === pub.readBigUInt64LE(PUBLIC_SOCKET_SLOT),
-  };
-}
 
 // Two workers can be live at once: slot 1 is the blocking launch/start send,
 // slot 2 is the retained read/write worker that must act while slot 1 holds the
@@ -199,7 +183,6 @@ async function dispatch(context, request, state, domain) {
     const upload = batchInputs ? Buffer.alloc(count * 0x1000) : null;
     check(['control-test', 'cmif-control', 'pm-launch', 'pm-start', 'sm-get', 'app-service', 'ro-probe', 'ro-process', 'notifier-probe', 'retained-read', 'retained-write', 'retained-dump', 'tcp-test'].includes(request.kind), 'Unknown worker operation');
     const calls = [{function: live.sdk + events.code.wait.offset, args: [gate, 0, 0, 0]}];
-    let connectInfo = null;
     for (let i = 0; i < count; i++) {
       let bytes;
       const address = area + 0x1000 * (i + 1);
@@ -211,10 +194,9 @@ async function dispatch(context, request, state, domain) {
         sa[0] = 2; sa.writeUInt16BE(Number(request.port), 2);
         sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
         await s.write(area + 0x1800, sa);
-        connectInfo = await resolveConnect(s, live.sdk);
         const socketIndex = calls.length;
         calls.push({function: live.sdk + SOCK.socket, args: [2, 1, 0, 0]});
-        calls.push({function: live.sdk + connectInfo.stub,
+        calls.push({function: live.sdk + SOCK.connect,
           args: [{result: socketIndex}, area + 0x1800, 16, 0]});
         calls.push({function: live.sdk + SOCK.send,
           args: [{result: socketIndex}, area + 0x10000, payload.length, 0]});
@@ -345,10 +327,9 @@ async function dispatch(context, request, state, domain) {
       sa[0] = 2; sa.writeUInt16BE(Number(request.port), 2);
       sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
       await s.write(area + 0x1800, sa);
-      connectInfo = await resolveConnect(s, live.sdk);
       const socketIndex = calls.length;
       calls.push({function: live.sdk + SOCK.socket, args: [2, 1, 0, 0]});      // socket
-      calls.push({function: live.sdk + connectInfo.stub,
+      calls.push({function: live.sdk + SOCK.connect,
         args: [{result: socketIndex}, area + 0x1800, 16, 0]});                // connect
       calls.push({function: live.sdk + SOCK.send,
         args: [{result: socketIndex}, area + 0x10000, Number(request.length), 0]}); // send
@@ -362,14 +343,12 @@ async function dispatch(context, request, state, domain) {
       processCommand: request.kind === 'ro-process' ? Number(request.id) : undefined,
       launchTitle: request.kind === 'pm-launch' ? request.title : undefined,
       launchFlags: request.kind === 'pm-launch' ? Number(request.flags ?? 0) : undefined,
-      connectSlot: connectInfo?.slot, connectStub: connectInfo?.stub,
-      connectLayer: connectInfo ? connectInfo.socketLayerMatches : undefined});
+      connectStub: SOCK.connect});
     (state.workers ||= [])[workerSlot - 1] = worker;
     if (workerSlot === 1) state.worker = worker;
     await save();
     return {slot: workerSlot, kind: worker.kind, thread: worker.thread, gate, count, area,
-      connectSlot: worker.connectSlot, connectStub: worker.connectStub,
-      connectLayer: worker.connectLayer};
+      connectStub: worker.connectStub};
   }
   const worker = workerFor(state, request);
   if (command === 'worker-output') {
