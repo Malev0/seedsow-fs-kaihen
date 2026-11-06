@@ -4,6 +4,20 @@ const check = (ok, message) => { if (!ok) throw Error(message); };
 // Seedsow CancelSynchronization veneer (svc #0x19); SmileBASIC used 0x158414.
 const cancelCode = {offset: 0x168c0c, bytes: '210300d4c0035fd6'};
 
+// Seedsow nn::socket public API, verified against research/.../sdk.text:
+//   socket 0x95300, connect 0x94DD0, send 0x949C0, close 0x93220.
+// Do not use shared/sdk-functions.json's socket/connect/closeSocket entries:
+// those byte signatures belong to a different build. 0x140C50 in particular is
+// mid-function in this build, so calling it (the old tcp-test connect) crashes
+// the application. The four functions below share one fd-tag layer, so use them
+// as a set.
+const SOCK = {
+  socket: 0x95300,
+  connect: 0x94DD0,
+  send: 0x949C0,
+  close: 0x93220,
+};
+
 // Two workers can be live at once: slot 1 is the blocking launch/start send,
 // slot 2 is the retained read/write worker that must act while slot 1 holds the
 // launcher shim. `state.worker` stays the slot-1 alias for older callers.
@@ -177,12 +191,12 @@ async function dispatch(context, request, state, domain) {
         sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
         await s.write(area + 0x1800, sa);
         const socketIndex = calls.length;
-        calls.push({function: live.sdk + 0x14d4c0, args: [2, 1, 0, 0]});
-        calls.push({function: live.sdk + 0x140c50,
+        calls.push({function: live.sdk + SOCK.socket, args: [2, 1, 0, 0]});
+        calls.push({function: live.sdk + SOCK.connect,
           args: [{result: socketIndex}, area + 0x1800, 16, 0]});
-        calls.push({function: live.sdk + 0x14d350,
+        calls.push({function: live.sdk + SOCK.send,
           args: [{result: socketIndex}, area + 0x10000, payload.length, 0]});
-        calls.push({function: live.sdk + 0x14d510, args: [{result: socketIndex}, 0, 0, 0]});
+        calls.push({function: live.sdk + SOCK.close, args: [{result: socketIndex}, 0, 0, 0]});
         continue;
       }
       if (request.kind === 'app-service') {
@@ -310,12 +324,12 @@ async function dispatch(context, request, state, domain) {
       sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
       await s.write(area + 0x1800, sa);
       const socketIndex = calls.length;
-      calls.push({function: live.sdk + 0x14d4c0, args: [2, 1, 0, 0]});        // socket
-      calls.push({function: live.sdk + 0x140c50,
+      calls.push({function: live.sdk + SOCK.socket, args: [2, 1, 0, 0]});      // socket
+      calls.push({function: live.sdk + SOCK.connect,
         args: [{result: socketIndex}, area + 0x1800, 16, 0]});                // connect
-      calls.push({function: live.sdk + 0x14d350,
+      calls.push({function: live.sdk + SOCK.send,
         args: [{result: socketIndex}, area + 0x10000, Number(request.length), 0]}); // send
-      calls.push({function: live.sdk + 0x14d510, args: [{result: socketIndex}, 0, 0, 0]}); // close
+      calls.push({function: live.sdk + SOCK.close, args: [{result: socketIndex}, 0, 0, 0]}); // close
     }
     const worker = await native.start(s, area + 0x20000, 0x40000, slot, calls,
       'ro-' + request.kind + '-' + Date.now(), 0,

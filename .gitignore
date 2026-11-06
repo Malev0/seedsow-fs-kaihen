@@ -35,6 +35,7 @@ ns2jb-main/ns2jb-main/engine/switch2/acquisition-supervisor.json
 ns2jb-main/ns2jb-main/engine/switch2/app/memory-map.json
 ns2jb-main/ns2jb-main/engine/switch2/app/mounts.json
 ns2jb-main/ns2jb-main/engine/switch2/app/ro-retained-dump-*
+ns2jb-main/ns2jb-main/engine/switch2/app/ro-tcp-test-*
 ns2jb-main/ns2jb-main/engine/switch2/memory/reserved-gap-*
 ns2jb-main/ns2jb-main/engine/switch2/retained/seedsow-metadata-*
 ns2jb-main/ns2jb-main/engine/switch2/retained/reserved-gap-*
