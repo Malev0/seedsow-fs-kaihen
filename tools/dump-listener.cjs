@@ -22,6 +22,8 @@ const server = net.createServer(socket => {
   socket.on('data', chunk => chunks.push(chunk));
   socket.on('end', () => {
     const bytes = Buffer.concat(chunks);
+    // The GUI preflights the listener with a bare connect; do not save that.
+    if (!bytes.length) return;
     fs.writeFileSync(out, bytes);
     console.log(JSON.stringify({at: new Date().toISOString(), from: socket.remoteAddress,
       bytes: bytes.length, file: out}));

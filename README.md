@@ -162,6 +162,27 @@ used.
 | `NS2_BOUNDED_SEND_MS` | timeout for bounded FS sends |
 | `NS2_QUALIFY=1` | force `app/qualify` (skipped for Seedsow) |
 | `NS2_PICO_CONN` | path to the Pico bridge connection file |
+| `NS2_DUMP_HOST` / `NS2_DUMP_PORT` | TCP target for the watch run's slot-2 capture (default port 39401) |
+| `NS2_LAUNCH_DUMP_DELAY_MS` | delay before the slot-2 read during a watch run (default 1000) |
+
+`gui/env.txt` holds the committed defaults; `gui/env.local.txt` (gitignored) is read
+after it and overrides it for machine-specific values such as `NS2_DUMP_HOST`. The GUI
+refuses Start if a watch run's dump listener is not reachable, so a wrong address no
+longer burns a boot.
+
+### Watch capture (flags 0)
+
+With `NS2_LAUNCH_WAIT_ONLY=1` the launch send holds the launcher shim, so the host cannot
+read FS memory during the load. The slot-2 worker reads the first free table window and
+sends it to the PC over TCP:
+
+1. Start the listener: `node tools/dump-listener.cjs`
+2. Put this PC's LAN address in `gui/env.local.txt` (`NS2_DUMP_HOST=...`).
+3. Start the run. The listener writes `dump-<timestamp>.bin` in the repository root.
+4. `node tools/parse-dump.cjs` prints every table row and marks the donor metadata match.
+
+The console is expected to fault with `2162-0002` during this diagnostic; the capture
+arrives before the fault.
 
 ## When something goes wrong
 

@@ -306,7 +306,8 @@ async function main() {
         proof.watch.prepare = await memory.request({command: 'root-native-worker-prepare', slot: 2,
           areaOffset: 0x100000, kind: 'retained-dump',
           handle: memory.report.retained.candidateHandle, readOffset: next.readOffset,
-          length: proof.watch.windowLength, delayNs: 1000000000,
+          length: proof.watch.windowLength,
+          delayNs: Number(process.env.NS2_LAUNCH_DUMP_DELAY_MS || 1000) * 1e6,
           pcAddress: proof.watch.pcAddress, port: proof.watch.port});
         proof.watch.release = await memory.request({command: 'root-native-worker-release', slot: 2});
         await save();

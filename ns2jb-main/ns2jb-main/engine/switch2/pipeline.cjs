@@ -103,6 +103,14 @@ async function main() {
     const gate = await script('ro', 'test-gate');
     check(gate.verified && gate.restored, 'The native request gate did not qualify');
     const launch = await script('ro', 'launch', [], 300000);
+    // The wait-only/watch diagnostic deliberately leaves the app on the error
+    // screen; its product is the TCP capture, not a started payload. Stop here
+    // instead of reporting a fake "PM did not accept the payload" failure.
+    if (process.env.NS2_LAUNCH_WAIT_ONLY === '1' || process.env.NS2_LAUNCH_WATCH === '1') {
+      console.log(JSON.stringify({stage: 'wait-only-complete', file: launch.file,
+        watch: launch.watch, waitOnly: launch.waitOnly}));
+      return;
+    }
     check(launch.imageAccepted && launch.restored && launch.pid, 'PM did not accept the payload');
     const activation = await stage('Start RO payload', () => runtime.activate(launch.file));
     const proof = await stage('RO instruction challenges', () => runtime.probe(activation.pid));

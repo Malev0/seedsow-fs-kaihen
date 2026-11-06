@@ -13,6 +13,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
+const os = require('node:os');
 const {spawn} = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -402,8 +403,9 @@ async function setupBoot() {
 //   NS2_COMMIT_MB=8
 // One KEY=VALUE per line; read on every Start so a boot can be A/B tested
 // without restarting the controller. Blank lines and # comments are ignored.
-function extraEnv() {
-  const file = path.join(__dirname, 'env.txt');
+// `env.local.txt` (gitignored) is read after `env.txt` and overrides it, so
+// machine-specific values such as the dump host never land in the repository.
+function readEnvFile(file) {
   let text;
   try { text = fs.readFileSync(file, 'utf8'); } catch { return {}; }
   const out = {};
@@ -415,6 +417,43 @@ function extraEnv() {
     out[trimmed.slice(0, at).trim()] = trimmed.slice(at + 1).trim();
   }
   return out;
+}
+
+function extraEnv() {
+  return {...readEnvFile(path.join(__dirname, 'env.txt')),
+    ...readEnvFile(path.join(__dirname, 'env.local.txt'))};
+}
+
+function firstLanIPv4() {
+  for (const list of Object.values(os.networkInterfaces()))
+    for (const entry of list || [])
+      if (entry.family === 'IPv4' && !entry.internal) return entry.address;
+  return null;
+}
+
+function tcpConnect(host, port, timeoutMs = 1500) {
+  return new Promise(resolve => {
+    const socket = net.createConnection({host, port});
+    let settled = false;
+    const done = ok => { if (settled) return; settled = true; socket.destroy(); resolve(ok); };
+    socket.setTimeout(timeoutMs, () => done(false));
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+  });
+}
+
+// The flags-0 watch run has no host-side way to read the captured window; the
+// slot-2 worker sends it over TCP. Refuse Start before touching the console if
+// that listener is not reachable, instead of burning a boot.
+async function dumpPreflight(extra) {
+  if (!(extra.NS2_LAUNCH_WAIT_ONLY === '1' || extra.NS2_LAUNCH_WATCH === '1')) return null;
+  const host = extra.NS2_DUMP_HOST || firstLanIPv4();
+  const port = Number(extra.NS2_DUMP_PORT || 39401);
+  if (!host) return 'No LAN IPv4 found; set NS2_DUMP_HOST in gui/env.local.txt.';
+  if (!(await tcpConnect(host, port)))
+    return `dump listener is not reachable at ${host}:${port} - start "node tools/dump-listener.cjs" and put this PC's LAN address in gui/env.local.txt (NS2_DUMP_HOST).`;
+  addLine(`[gui] dump listener reachable at ${host}:${port}`);
+  return null;
 }
 
 // One acquisition per boot: Start is refused until the app is relaunched.
@@ -537,6 +576,13 @@ async function startRun(options = {}) {
     try { fs.writeFileSync(STATUS, ''); } catch {}
     setState({stage: ''});
     addLine(`[gui] console ${CONSOLE}`);
+    const extra = extraEnv();
+    const dumpProblem = await dumpPreflight(extra);
+    if (dumpProblem) {
+      addLine('[gui] ' + dumpProblem);
+      setState({phase: 'idle', message: dumpProblem});
+      return {ok: false, error: dumpProblem};
+    }
     if (!(await probeConsole())) {
       setState({phase: 'idle', message: 'Console HTTP is down — start Seedsow and press Y, then press Start.'});
       addLine('[gui] console 8080 is not reachable');

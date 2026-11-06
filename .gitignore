@@ -46,6 +46,9 @@ ns2jb-main/ns2jb-main/engine/switch2/ro/control-*.cjs
 # Local machine configuration (see the .example files)
 tools/bridge.pid
 tools/console-host.txt
+tools/seedsow-connection.json
+gui/env.local.txt
+dump-*.bin
 
 # Python bytecode
 __pycache__/
