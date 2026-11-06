@@ -164,6 +164,7 @@ used.
 | `NS2_PICO_CONN` | path to the Pico bridge connection file |
 | `NS2_DUMP_HOST` / `NS2_DUMP_PORT` | TCP target for the watch run's slot-2 capture (default port 39401) |
 | `NS2_LAUNCH_DUMP_DELAY_MS` | delay before the slot-2 read during a watch run (default 1000) |
+| `NS2_LAUNCH_TCP_TEST=1` | send a 17-byte `SEEDSOW-TCP-TEST` marker from a slot-2 worker before the real watch read (socket-path diagnostic) |
 
 `gui/env.txt` holds the committed defaults; `gui/env.local.txt` (gitignored) is read
 after it and overrides it for machine-specific values such as `NS2_DUMP_HOST`. The GUI

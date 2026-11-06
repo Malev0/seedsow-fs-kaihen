@@ -273,6 +273,31 @@ async function main() {
       proof.armed = await gate.inspect(false); await save();
       console.log(JSON.stringify({stage: 'launch-armed', file, armed: proof.armed}));
       const watch = process.env.NS2_LAUNCH_WAIT_ONLY === '1' || process.env.NS2_LAUNCH_WATCH === '1';
+      if (process.env.NS2_LAUNCH_TCP_TEST === '1') {
+        // Pure socket probe before the launch: no FS read, just connect/send a
+        // fixed marker. If the listener sees this, the worker socket path and
+        // the PC network path are good; if not, the retained-dump failure is not
+        // the table read.
+        const port = Number(process.env.NS2_DUMP_PORT || 39401);
+        const host = dumpHost();
+        proof.tcpTest = {pcAddress: host, port};
+        try {
+          proof.tcpTest.prepare = await memory.request({command: 'root-native-worker-prepare', slot: 2,
+            areaOffset: 0x80000, kind: 'tcp-test', pcAddress: host, port});
+          proof.tcpTest.release = await memory.request({command: 'root-native-worker-release', slot: 2});
+          let state = null;
+          for (let i = 0; i < 12; i++) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            state = await memory.request({command: 'root-native-worker-state', slot: 2});
+            if (state.finished) break;
+          }
+          proof.tcpTest.state = state;
+          if (state?.finished) proof.tcpTest.join = await memory.request({command: 'root-native-worker-join', slot: 2});
+          else proof.tcpTest.pending = true;
+        } catch (error) { proof.tcpTest.error = error.message; }
+        await save();
+        if (proof.tcpTest.pending) throw Error('TCP test worker did not finish; see proof.tcpTest');
+      }
       if (watch) {
         const bias = Number(memory.report.retainedMemory.bootstrapPlan.addressBias);
         const live = new Set((tableBaseline ? [...tableBaseline] : [])

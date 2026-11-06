@@ -155,7 +155,7 @@ async function dispatch(context, request, state, domain) {
     check(area + 0x60000 <= s.base + s.bytes, 'Worker area exceeds the retained allocation');
     await events.initialize(s, gate);
     const handle = Number(request.handle);
-    check(request.kind === 'app-service' || s.handles.has(handle), 'Worker IPC requires a retained caller handle');
+    check(request.kind === 'app-service' || request.kind === 'tcp-test' || s.handles.has(handle), 'Worker IPC requires a retained caller handle');
     const batchInputs = request.kind === 'notifier-probe' && request.candidates;
     if (batchInputs) check(Array.isArray(batchInputs) && batchInputs.length > 0 && batchInputs.length <= 16 &&
       batchInputs.every(n => Number.isInteger(n) && n >= 0 && n <= 0xffffffff), 'Expected 1..16 candidate handles');
@@ -163,11 +163,28 @@ async function dispatch(context, request, state, domain) {
       : request.kind === 'retained-read' ? (request.reads?.length || 1)
       : request.kind === 'retained-write' ? Number(request.count || 1) : 1;
     const upload = batchInputs ? Buffer.alloc(count * 0x1000) : null;
-    check(['control-test', 'cmif-control', 'pm-launch', 'pm-start', 'sm-get', 'app-service', 'ro-probe', 'ro-process', 'notifier-probe', 'retained-read', 'retained-write', 'retained-dump'].includes(request.kind), 'Unknown worker operation');
+    check(['control-test', 'cmif-control', 'pm-launch', 'pm-start', 'sm-get', 'app-service', 'ro-probe', 'ro-process', 'notifier-probe', 'retained-read', 'retained-write', 'retained-dump', 'tcp-test'].includes(request.kind), 'Unknown worker operation');
     const calls = [{function: live.sdk + events.code.wait.offset, args: [gate, 0, 0, 0]}];
     for (let i = 0; i < count; i++) {
       let bytes;
       const address = area + 0x1000 * (i + 1);
+      if (request.kind === 'tcp-test') {
+        // Pure socket-path probe: no FS read, just connect/send a fixed marker.
+        const payload = Buffer.from('SEEDSOW-TCP-TEST\n');
+        await s.write(area + 0x10000, payload);
+        const sa = Buffer.alloc(16);
+        sa[0] = 2; sa.writeUInt16BE(Number(request.port), 2);
+        sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
+        await s.write(area + 0x1800, sa);
+        const socketIndex = calls.length;
+        calls.push({function: live.sdk + 0x14d4c0, args: [2, 1, 0, 0]});
+        calls.push({function: live.sdk + 0x140c50,
+          args: [{result: socketIndex}, area + 0x1800, 16, 0]});
+        calls.push({function: live.sdk + 0x14d350,
+          args: [{result: socketIndex}, area + 0x10000, payload.length, 0]});
+        calls.push({function: live.sdk + 0x14d510, args: [{result: socketIndex}, 0, 0, 0]});
+        continue;
+      }
       if (request.kind === 'app-service') {
         check(typeof request.name === 'string' && /^[a-z0-9:-]{1,8}$/.test(request.name), 'Invalid application service name');
         const code = require("../../shared/sdk-functions.json").getService;
@@ -302,7 +319,7 @@ async function dispatch(context, request, state, domain) {
     }
     const worker = await native.start(s, area + 0x20000, 0x40000, slot, calls,
       'ro-' + request.kind + '-' + Date.now(), 0,
-      {forceHost: request.kind === 'retained-dump'});
+      {forceHost: request.kind === 'retained-dump' || request.kind === 'tcp-test'});
     Object.assign(worker, {kind: request.kind, handle, gate, area, count, released: false,
       serviceName: request.name, challenge: request.hex, candidates: batchInputs || undefined,
       processCommand: request.kind === 'ro-process' ? Number(request.id) : undefined,
@@ -311,7 +328,7 @@ async function dispatch(context, request, state, domain) {
     (state.workers ||= [])[workerSlot - 1] = worker;
     if (workerSlot === 1) state.worker = worker;
     await save();
-    return {slot: workerSlot, kind: worker.kind, thread: worker.thread, gate, count};
+    return {slot: workerSlot, kind: worker.kind, thread: worker.thread, gate, count, area};
   }
   const worker = workerFor(state, request);
   if (command === 'worker-output') {
@@ -363,7 +380,7 @@ async function dispatch(context, request, state, domain) {
       check(finished, 'Worker is still pending');
       await native.join(s, worker, 1000);
       worker.results = worker.results.map(String);
-      await parseResponses(values, result, worker);
+      if (worker.kind !== 'tcp-test') await parseResponses(values, result, worker);
       await events.finalize(s, worker.gate);
       worker.completion = result;
       await save();
