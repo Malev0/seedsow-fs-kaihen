@@ -1,0 +1,50 @@
+{
+  "allocate": {
+    "offset": 1285792,
+    "bytes": "484f00b0e20301aa084141f9e10300aa"
+  },
+  "free": {
+    "offset": 1285824,
+    "bytes": "484f00b02900008b084141f9e20301aa"
+  },
+  "getService": {
+    "offset": 1363088,
+    "bytes": "fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054"
+  },
+  "send": {
+    "offset": 1477716,
+    "bytes": "410400d4c0035fd6"
+  },
+  "close": {
+    "offset": 1477604,
+    "bytes": "c10200d4c0035fd6"
+  },
+  "memset": {
+    "offset": 5384944,
+    "bytes": "420600b44800008b5f0c00f101000039"
+  },
+  "socket": {
+    "offset": 1314112,
+    "bytes": "6c121214"
+  },
+  "connect": {
+    "offset": 1313872,
+    "bytes": "6c121214"
+  },
+  "closeSocket": {
+    "offset": 1314192,
+    "bytes": "6c121214"
+  },
+  "fcntl": {
+    "offset": 1314432,
+    "bytes": "ff8303d1fd7b0da9fd430391e8058092e903009108f0dff229010291a20f3ba9a9233fa9a84301d108c10091a9430091a9233ea9e8058092a4173ca9a61f3da9e00700ade20f01ade41702ade61f03ad8801f836092100111f210031a9831fb80c010054a9835ef82801088b020140b92c121294fd7b4da9ff830391c0035fd6a8035ef809210091a9031ef8020140b924121294fd7b4da9ff830391c0035fd6"
+  },
+  "poll": {
+    "offset": 1314256,
+    "bytes": "6c121214"
+  },
+  "errno": {
+    "offset": 1314992,
+    "bytes": "00121214"
+  }
+}

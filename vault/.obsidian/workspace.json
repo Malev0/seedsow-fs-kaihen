@@ -1,0 +1,210 @@
+{
+  "main": {
+    "id": "ca5025dd74067301",
+    "type": "split",
+    "children": [
+      {
+        "id": "9eab959f5f78e33b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "9dfe811664629982",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Stages/Stage 2 - The Three Windows.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Stage 2 - The Three Windows"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "dd7e628e1a5703d9",
+    "type": "split",
+    "children": [
+      {
+        "id": "801d5d16b399b2a6",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "20f415a534650ec6",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false,
+                "showSearch": true,
+                "searchQuery": ""
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "4aa21a1532180195",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "Acquisition",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "4babe7c98140bdeb",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ],
+        "currentTab": 1
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "a8b1dc825b4bf3cf",
+    "type": "split",
+    "children": [
+      {
+        "id": "d2e38bb7308b7e68",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "109a3cde106789dd",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "Stages/Stage 2 - The Three Windows.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks"
+            }
+          },
+          {
+            "id": "e738adcf10c1db57",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "Stages/Stage 2 - The Three Windows.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links"
+            }
+          },
+          {
+            "id": "972829f19fd7c2aa",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "363e0ea8e543d17a",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "c2b2d53a034036df",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "Stages/Stage 2 - The Three Windows.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "9dfe811664629982",
+  "lastOpenFiles": [
+    "How to Run a Boot.md",
+    "Glossary.md",
+    "Credits.md",
+    "The Console Landscape.md",
+    "Untitled.canvas",
+    "2026-11-05.md",
+    "Concepts/Domains.md",
+    "Stages/Stage 1 - App Map.md",
+    "Concepts/PM and the Loader.md",
+    "Current Status.md",
+    "Environment Variables.md",
+    "Big Picture.md",
+    "00 Start Here.md",
+    "The Four Stages.md",
+    "Offsets and Addresses.md"
+  ]
+}

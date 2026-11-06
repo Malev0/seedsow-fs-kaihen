@@ -1,0 +1,52 @@
+# Generated run artifacts (large, reproducible, and machine-specific)
+runs/
+dumps/
+**/runs/
+**/dumps/
+node_modules/
+*.log
+*.err
+*.jsonl
+*.tmp
+
+# Large binary captures: retained FS reads, worker frames, bulk transfers
+**/memory/*.bin
+**/retained/*.bin
+**/*-bulk-*.bin
+*.nsp
+*.xci
+*.nca
+
+# System-module dump (10 MB, copyrighted; keep locally)
+fs.elf
+
+# Extracted game image
+research/Seedsow Lullaby Demo */
+
+# Session / per-boot state. Regenerated on every run and not reusable on
+# another console or PC, so it is not needed to run this.
+HANDOFF.md
+docs/history/
+ns2jb-main/ns2jb-main/engine/connection.json
+ns2jb-main/ns2jb-main/engine/switch2/status.txt
+ns2jb-main/ns2jb-main/engine/switch2/pipeline.json
+ns2jb-main/ns2jb-main/engine/switch2/current-acquisition.json
+ns2jb-main/ns2jb-main/engine/switch2/acquisition-supervisor.json
+ns2jb-main/ns2jb-main/engine/switch2/app/memory-map.json
+ns2jb-main/ns2jb-main/engine/switch2/app/mounts.json
+ns2jb-main/ns2jb-main/engine/switch2/app/ro-retained-dump-*
+ns2jb-main/ns2jb-main/engine/switch2/memory/reserved-gap-*
+ns2jb-main/ns2jb-main/engine/switch2/retained/seedsow-metadata-*
+ns2jb-main/ns2jb-main/engine/switch2/retained/reserved-gap-*
+ns2jb-main/ns2jb-main/engine/switch2/ro/seedsow-*.json
+ns2jb-main/ns2jb-main/engine/switch2/ro/seedsow-code-*/
+ns2jb-main/ns2jb-main/engine/switch2/ro/root/*.json
+ns2jb-main/ns2jb-main/engine/switch2/ro/control-*.cjs
+
+# Local machine configuration (see the .example files)
+tools/bridge.pid
+tools/console-host.txt
+
+# Python bytecode
+__pycache__/
+*.pyc

@@ -1,0 +1,34 @@
+
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openrouter/deepseek/deepseek-v4.1-flash-1017",
+
+  "provider": {
+    "openrouter": {
+      "models": {
+        "deepseek/deepseek-v4.1-flash-1017": {
+          "name": "DeepSeek V4.1 Flash 1017 - deepinfra fp8",
+          "options": {
+            "provider": {
+              "only": ["deepinfra/fp8"],
+              "allow_fallbacks": false
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "compaction": {
+    "auto": true,
+    "buffer": "40%",
+    "keep": {
+      "tokens": 15000
+    }
+  },
+
+  "permission": {
+    "websearch": "allow",
+    "webfetch": "allow"
+  }
+}

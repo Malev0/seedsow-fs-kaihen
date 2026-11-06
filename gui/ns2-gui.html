@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NS2JB · Seedsow controller</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b23; --panel2: #1d242e; --text: #dbe3ee;
+    --muted: #8b98ab; --line: #2a323d; --green: #34d399; --amber: #fbbf24;
+    --red: #f87171; --blue: #60a5fa; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .2px; }
+  .pill {
+    font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+    background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+  }
+  .pill.idle { color: var(--muted); }
+  .pill.setup, .pill.running { color: var(--amber); border-color: #4a3d16; }
+  .pill.restarting { color: #c4b5fd; border-color: #3b2f63; }
+  .pill.finished { color: var(--blue); }
+  .pill.crashed { color: var(--red); border-color: #4a2424; }
+  .spacer { flex: 1; }
+  .console { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .console input {
+    width: 10.5em; font: 12px/1.4 var(--mono); color: var(--text);
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px;
+  }
+  .console button { padding: 2px 8px; font-size: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.up { background: var(--green); box-shadow: 0 0 8px #34d39988; }
+  .dot.down { background: var(--red); }
+  main { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; min-height: 0; }
+  .buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 600; padding: 11px 18px; border-radius: 9px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+    cursor: pointer; transition: filter .12s ease, transform .05s ease;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.15); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: default; }
+  #start { background: #12463a; border-color: #1c6b57; color: #d1fae5; }
+  #restart { background: #2b2450; border-color: #453a7a; color: #e9e3ff; }
+  #crashed { background: #4a2020; border-color: #6b2d2d; color: #fee2e2; }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 6px; padding: 0 10px;
+    font-size: 12.5px; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 9px; background: var(--panel);
+  }
+  .toggle input { accent-color: #60a5fa; }
+  .statusline { display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
+  .msg { color: var(--text); }
+  .stage { font-family: var(--mono); font-size: 12.5px; color: var(--amber); }
+  .steps { display: flex; gap: 8px; }
+  .step {
+    font-size: 12px; font-family: var(--mono); padding: 3px 9px; border-radius: 6px;
+    background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+  }
+  .step.active { color: #0e1116; background: var(--amber); border-color: var(--amber); font-weight: 700; }
+  .step.done { color: var(--green); border-color: #1c6b57; }
+  .progressrow { display: flex; align-items: center; gap: 10px; }
+  .pstage { font-family: var(--mono); font-size: 12.5px; color: var(--text); min-width: 64px; }
+  .bar {
+    flex: 1; height: 10px; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 999px; overflow: hidden;
+  }
+  #pfill {
+    height: 100%; width: 0%; border-radius: 999px;
+    background: linear-gradient(90deg, #2dd4bf, #60a5fa); transition: width .4s ease;
+  }
+  .ppct { font-family: var(--mono); font-size: 12.5px; min-width: 44px; text-align: right; }
+  .pdetail {
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted); max-width: 46%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .controls {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  }
+  .controls .clabel {
+    font-size: 11.5px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--muted); font-weight: 700;
+  }
+  .pad { display: grid; grid-template-columns: repeat(3, 30px); grid-template-rows: repeat(3, 30px); gap: 3px; }
+  .pad button { width: 30px; height: 30px; padding: 0; font-size: 12px; }
+  .pad .up { grid-column: 2; grid-row: 1; }
+  .pad .left { grid-column: 1; grid-row: 2; }
+  .pad .right { grid-column: 3; grid-row: 2; }
+  .pad .down { grid-column: 2; grid-row: 3; }
+  .group { display: flex; gap: 4px; align-items: center; }
+  .controls button { min-width: 34px; height: 32px; padding: 0 8px; font-size: 12.5px; border-radius: 8px; }
+  .controls button.pressed { background: #0f3a33; border-color: #1c6b57; color: #d1fae5; }
+  #picoRelease { background: #3a2a1a; border-color: #6b4a2d; color: #fde8c8; }
+  .picostate { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-left: auto; }
+  .picostate.up { color: var(--green); }
+  .picostate.warn { color: var(--amber); }
+  .picostate.down { color: var(--red); }
+  .grid { display: grid; grid-template-columns: 1fr 300px; gap: 12px; flex: 1; min-height: 0; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .panel h2 {
+    margin: 0; padding: 9px 12px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--muted); border-bottom: 1px solid var(--line);
+    background: var(--panel2); font-weight: 700;
+  }
+  #log {
+    flex: 1; overflow: auto; padding: 10px 12px; font-family: var(--mono); font-size: 12.5px;
+    white-space: pre-wrap; word-break: break-word; line-height: 1.35;
+  }
+  #log .err { color: var(--red); }
+  #log .ok { color: var(--green); }
+  #log .dim { color: var(--muted); }
+  #log .gui { color: var(--blue); }
+  #detail { padding: 10px 12px; overflow: auto; font-size: 12.5px; }
+  #detail dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; }
+  #detail dt { color: var(--muted); }
+  #detail dd { margin: 0; font-family: var(--mono); word-break: break-word; }
+  #detail .bad { color: var(--red); }
+  #detail .good { color: var(--green); }
+  #detail .stages { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+  #detail .stages div { display: flex; justify-content: space-between; gap: 8px; font-family: var(--mono); font-size: 12px; }
+  #detail .stages .complete { color: var(--green); }
+  #detail .stages .failed { color: var(--red); }
+  #detail .stages .pending { color: var(--muted); }
+  footer { padding: 8px 16px; color: var(--muted); font-size: 11.5px; border-top: 1px solid var(--line); }
+  code { font-family: var(--mono); }
+</style>
+</head>
+<body>
+<header>
+  <h1>NS2JB · Seedsow controller</h1>
+  <span id="phase" class="pill idle">idle</span>
+  <span class="spacer"></span>
+  <span class="console">
+    <span id="dot" class="dot"></span><span id="console"></span>
+    <input id="consoleIp" spellcheck="false" autocomplete="off"
+      title="Console IP address, saved to tools/console-host.txt (press Start afterwards to restart the bridge on it)">
+    <button id="consoleSet" title="Save this address and probe the console">Set IP</button>
+  </span>
+</header>
+
+<main>
+  <div class="buttons">
+    <button id="start">Start on this boot</button>
+    <button id="restart">Restart Game</button>
+    <label class="toggle" title="Second A block: press A twice, or once after removing a profile">
+      <input type="checkbox" id="atwice" checked> A &times;2
+    </label>
+    <label class="toggle" title="Wait after the last A (while the app boots) before pressing Y. Raise it if the restart misses the launcher.">
+      Y delay <input type="number" id="ydelay" min="0" max="60000" step="250" value="3000"> ms
+    </label>
+    <label class="toggle" title="When a run fails before 3/4 (the per-boot acquisition lottery), relaunch the app and try another boot automatically">
+      <input type="checkbox" id="autoRetry"> auto
+      <input type="number" id="autoAttempts" min="1" max="20" step="1" value="6"> tries
+    </label>
+    <button id="crashed">App crashed / relaunched</button>
+    <button id="stop">Stop run</button>
+    <button id="clean">Clean save</button>
+  </div>
+
+  <div class="statusline">
+    <span id="msg" class="msg">Ready.</span>
+    <span id="stage" class="stage"></span>
+    <span class="spacer"></span>
+    <div class="steps">
+      <span class="step" data-step="1">1 · acquire</span>
+      <span class="step" data-step="2">2 · retained</span>
+      <span class="step" data-step="3">3 · RO</span>
+      <span class="step" data-step="4">4 · process</span>
+    </div>
+  </div>
+
+  <div class="progressrow">
+    <span id="pstage" class="pstage">Stage –</span>
+    <div class="bar"><div id="pfill"></div></div>
+    <span id="ppct" class="ppct">—</span>
+    <span id="pdetail" class="pdetail"></span>
+  </div>
+
+  <div class="controls">
+    <span class="clabel">Pico controller</span>
+    <div class="pad">
+      <button data-button="DPAD_UP" class="up" title="D-pad up">&#9650;</button>
+      <button data-button="DPAD_LEFT" class="left" title="D-pad left">&#9664;</button>
+      <button data-button="DPAD_RIGHT" class="right" title="D-pad right">&#9654;</button>
+      <button data-button="DPAD_DOWN" class="down" title="D-pad down">&#9660;</button>
+    </div>
+    <div class="group">
+      <button data-button="Y" title="Y">Y</button>
+      <button data-button="X" title="X">X</button>
+      <button data-button="B" title="B">B</button>
+      <button data-button="A" title="A">A</button>
+    </div>
+    <div class="group">
+      <button data-button="L" title="L">L</button>
+      <button data-button="ZL" title="ZL">ZL</button>
+      <button data-button="R" title="R">R</button>
+      <button data-button="ZR" title="ZR">ZR</button>
+    </div>
+    <div class="group">
+      <button data-button="PLUS" title="Plus">+</button>
+      <button data-button="MINUS" title="Minus">&minus;</button>
+      <button data-button="HOME" title="Home">&#8962;</button>
+      <button data-button="CAPTURE" title="Capture">&#9635;</button>
+    </div>
+    <div class="group">
+      <button id="picoPair" title="Hold L and R together (Change Grip/Order, pairing)">L+R pair</button>
+      <button id="picoHoldA" title="Hold A for 1.5 s">Hold A</button>
+      <select id="picoHold" title="How long each pad press is held">
+        <option value="0.12">tap 120 ms</option>
+        <option value="0.6">hold 600 ms</option>
+        <option value="1.5">hold 1.5 s</option>
+      </select>
+    </div>
+    <button id="picoRelease" title="Drop queued steps and release every button">Release all</button>
+    <span id="picoState" class="picostate">bridge: ?</span>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Log</h2>
+      <div id="log"></div>
+    </section>
+    <section class="panel">
+      <h2>Result</h2>
+      <div id="detail"><span class="dim">No run yet.</span></div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  Start = <code>resume.ps1</code> (stop-all, shim, mounts, bridge) then <code>pipeline.cjs --dump-firmware</code>.
+  API: <code>127.0.0.1:31338/api/state</code>
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const logEl = $('log');
+let lastSeq = 0;
+let autoScroll = true;
+
+logEl.addEventListener('scroll', () => {
+  autoScroll = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 24;
+});
+
+function classify(text) {
+  // PowerShell turns a native command's stderr into ``noise`` records; not a failure.
+  if (/NativeCommandError|CategoryInfo|FullyQualifiedErrorId|^\+ |^At [A-Z]:\\/.test(text) ||
+      /stopped bridge pid|POST ERROR: .*10054/.test(text)) return 'dim';
+  if (/error|failed|refused|timed out|crash/i.test(text)) return 'err';
+  if (/complete|ready|pong|matches|ok\b/i.test(text)) return 'ok';
+  if (/^\[gui\]/.test(text)) return 'gui';
+  if (/^\[(setup|save|run)\]/.test(text)) return 'dim';
+  return '';
+}
+
+function addLine(text) {
+  const div = document.createElement('div');
+  const cls = classify(text);
+  if (cls) div.className = cls;
+  div.textContent = text;
+  logEl.appendChild(div);
+  while (logEl.childElementCount > 1500) logEl.removeChild(logEl.firstChild);
+  if (autoScroll) logEl.scrollTop = logEl.scrollHeight;
+}
+
+// `seq` is monotonic for the life of the controller, so this both drops the
+// replay duplicates and keeps order. A smaller seq than the last one we saw
+// means the controller restarted: start over instead of ignoring everything.
+function acceptLine(line) {
+  if (typeof line.seq !== 'number') return;
+  if (line.seq < lastSeq) { lastSeq = 0; logEl.innerHTML = ''; }
+  if (line.seq <= lastSeq) return;
+  lastSeq = line.seq;
+  addLine(line.text);
+}
+
+function renderState(s) {
+  if (typeof s.logSeq === 'number' && s.logSeq < lastSeq) { lastSeq = 0; logEl.innerHTML = ''; }
+  $('phase').textContent = s.phase;
+  $('phase').className = 'pill ' + s.phase;
+  $('msg').textContent = s.message || '';
+  $('console').textContent = s.console ? `${s.console}:8080 ${s.consoleUp === null ? '' : s.consoleUp ? 'up' : 'down'}` : '';
+  $('dot').className = 'dot ' + (s.consoleUp === null ? '' : s.consoleUp ? 'up' : 'down');
+  $('stage').textContent = s.stage || '';
+
+  const active = /\[(\d)\/4\]/.exec(s.stage || '');
+  if (active) {
+    const n = Number(active[1]);
+    document.querySelectorAll('.step').forEach(el => {
+      const k = Number(el.dataset.step);
+      el.className = 'step' + (k === n ? ' active' : k < n ? ' done' : '');
+    });
+  }
+
+  const prog = s.progress;
+  if (prog) {
+    $('pstage').textContent = 'Stage ' + prog.stage;
+    $('pfill').style.width = Math.max(0, Math.min(100, prog.percent)) + '%';
+    $('ppct').textContent = Math.round(prog.percent) + '%';
+    $('pdetail').textContent = [prog.label, prog.detail].filter(Boolean).join(' · ');
+  } else {
+    $('pstage').textContent = 'Stage –';
+    $('pfill').style.width = '0%';
+    $('ppct').textContent = '—';
+    $('pdetail').textContent = '';
+  }
+
+  const busy = s.phase === 'setup' || s.phase === 'running';
+  const restarting = s.phase === 'restarting';
+  $('start').disabled = busy || restarting;
+  $('restart').disabled = busy || restarting;
+  $('crashed').disabled = restarting;
+  $('stop').disabled = !busy;
+
+  const parts = [];
+  if (s.report) {
+    const r = s.report;
+    parts.push(`<dl>
+      <dt>probe</dt><dd>${r.file}</dd>
+      <dt>memory-ready</dt><dd class="${r.memoryReady ? 'good' : 'bad'}">${r.memoryReady}</dd>
+      <dt>candidates</dt><dd>strong ${r.strong} · weak ${r.weak} · stable ${r.stable}</dd>
+      <dt>cleaned up</dt><dd>${r.cleanedUp}</dd>
+      <dt>elapsed</dt><dd>${r.elapsed_s ?? '?'} s</dd>
+      ${r.error ? `<dt>error</dt><dd class="bad">${escapeHtml(r.error)}</dd>` : ''}
+      ${r.timings ? `<dt>waves</dt><dd>${r.timings.waves} · ${(r.timings.totalMs / 1000).toFixed(1)} s total</dd>
+      <dt>of which</dt><dd>workers ${(r.timings.workersMs / 1000).toFixed(1)} s · join ${(r.timings.joinMs / 1000).toFixed(1)} s · settle ${(r.timings.settleMs / 1000).toFixed(1)} s · ${r.timings.requests} RPC</dd>` : ''}
+    </dl>`);
+  }
+  if (s.pipeline && s.pipeline.stages.length) {
+    parts.push('<div class="stages">' + s.pipeline.stages.map(st => {
+      const cls = st.status === 'complete' ? 'complete' : st.status === 'failed' ? 'failed' : 'pending';
+      return `<div><span>${escapeHtml(st.name)}</span><span class="${cls}">${st.status}</span></div>`;
+    }).join('') + '</div>');
+  }
+  $('detail').innerHTML = parts.length ? parts.join('') : '<span class="dim">No run yet.</span>';
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+}
+
+async function post(path, body) {
+  const init = {method: 'POST'};
+  if (body !== undefined) {
+    init.headers = {'content-type': 'application/json'};
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, init);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) addLine(`[gui] ${data.error || res.status}`);
+  return data;
+}
+
+// ---- console address --------------------------------------------------------
+async function loadConsoleHost() {
+  try {
+    const res = await fetch('/api/console-host');
+    const j = await res.json();
+    if (j.host) $('consoleIp').value = j.host;
+    if (j.override) addLine(`[gui] NS2_CONSOLE=${j.override} overrides the saved address (unset it to use the field)`);
+  } catch {}
+}
+loadConsoleHost();
+
+$('consoleSet').addEventListener('click', async () => {
+  const host = $('consoleIp').value.trim();
+  try {
+    const res = await fetch('/api/console-host', {method: 'POST',
+      headers: {'content-type': 'application/json'}, body: JSON.stringify({host})});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { addLine(`[gui] address: ${j.error || res.status}`); return; }
+    addLine(`[gui] console address saved: ${j.host} (${j.consoleUp ? 'HTTP up' : 'HTTP down'}) - press Start to restart the bridge on it`);
+  } catch (error) {
+    addLine(`[gui] address: ${error.message}`);
+  }
+});
+
+// Remember the "A x2" toggle and the Y delay across reloads.
+const savedPresses = Number(localStorage.getItem('ns2jb.aPresses') || 2);
+$('atwice').checked = savedPresses !== 1;
+$('atwice').addEventListener('change', () => {
+  localStorage.setItem('ns2jb.aPresses', $('atwice').checked ? '2' : '1');
+});
+const savedYDelay = Number(localStorage.getItem('ns2jb.yDelay'));
+if (Number.isFinite(savedYDelay) && savedYDelay >= 0) $('ydelay').value = String(savedYDelay);
+
+// Auto mode: retry the boot lottery (failures before 3/4) automatically.
+$('autoRetry').checked = localStorage.getItem('ns2jb.autoRetry') === '1';
+const savedAttempts = Number(localStorage.getItem('ns2jb.autoAttempts') || 6);
+if (Number.isFinite(savedAttempts) && savedAttempts >= 1) $('autoAttempts').value = String(savedAttempts);
+$('autoRetry').addEventListener('change', () => {
+  localStorage.setItem('ns2jb.autoRetry', $('autoRetry').checked ? '1' : '0');
+});
+$('autoAttempts').addEventListener('change', () => {
+  const value = Math.min(20, Math.max(1, Number($('autoAttempts').value) || 6));
+  $('autoAttempts').value = String(value);
+  localStorage.setItem('ns2jb.autoAttempts', String(value));
+});
+
+$('start').addEventListener('click', () => {
+  logEl.innerHTML = '';
+  const attempts = $('autoRetry').checked
+    ? Math.min(20, Math.max(1, Number($('autoAttempts').value) || 6)) : 1;
+  const aPresses = $('atwice').checked ? 2 : 1;
+  const yDelayMs = Math.min(60000, Math.max(0, Number($('ydelay').value) || 0));
+  localStorage.setItem('ns2jb.aPresses', String(aPresses));
+  localStorage.setItem('ns2jb.yDelay', String(yDelayMs));
+  post('/api/start', {attempts, aPresses, yDelayMs});
+});
+$('restart').addEventListener('click', () => {
+  const aPresses = $('atwice').checked ? 2 : 1;
+  const yDelayMs = Math.min(60000, Math.max(0, Number($('ydelay').value) || 0));
+  localStorage.setItem('ns2jb.aPresses', String(aPresses));
+  localStorage.setItem('ns2jb.yDelay', String(yDelayMs));
+  logEl.innerHTML = '';
+  post('/api/restart-game', {aPresses, yDelayMs});
+});
+$('crashed').addEventListener('click', () => post('/api/crashed'));
+$('stop').addEventListener('click', () => post('/api/stop'));
+$('clean').addEventListener('click', () => post('/api/clean'));
+
+// ---- manual Pico controller --------------------------------------------------
+const picoStateEl = $('picoState');
+
+async function refreshPico() {
+  try {
+    const res = await fetch('/api/pico-status');
+    const j = await res.json();
+    if (j.ok) {
+      const player = j.player ? ` · P${j.player}` : '';
+      picoStateEl.textContent = 'Pico: ' + j.state + player;
+      picoStateEl.className = 'picostate ' + (j.state === 'connected' ? 'up' : 'warn');
+    } else {
+      picoStateEl.textContent = 'bridge offline';
+      picoStateEl.className = 'picostate down';
+    }
+  } catch {
+    picoStateEl.textContent = 'bridge offline';
+    picoStateEl.className = 'picostate down';
+  }
+}
+refreshPico();
+setInterval(refreshPico, 6000);
+
+async function sendTap(buttons, down) {
+  try {
+    const res = await fetch('/api/pico-tap', {method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({buttons, down})});
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      addLine(`[pico] ${buttons.join('+')}: ${j.error || res.status}`);
+    }
+  } catch (error) {
+    addLine(`[pico] ${buttons.join('+')}: ${error.message}`);
+  }
+}
+
+const holdSelect = $('picoHold');
+document.querySelectorAll('[data-button]').forEach(button => {
+  button.addEventListener('click', async () => {
+    const name = button.dataset.button;
+    button.classList.add('pressed');
+    setTimeout(() => button.classList.remove('pressed'), 160);
+    await sendTap([name], Number(holdSelect.value) || 0.12);
+  });
+});
+
+$('picoPair').addEventListener('click', () => sendTap(['L', 'R'], 1.2));
+$('picoHoldA').addEventListener('click', () => sendTap(['A'], 1.5));
+
+$('picoRelease').addEventListener('click', async () => {
+  const res = await fetch('/api/pico-stop', {method: 'POST'});
+  if (!res.ok) addLine('[pico] release failed');
+});
+
+const es = new EventSource('/api/events');
+es.addEventListener('state', e => renderState(JSON.parse(e.data)));
+es.addEventListener('line', e => acceptLine(JSON.parse(e.data)));
+es.onerror = () => addLine('[gui] lost connection to the controller; retrying ...');
+
+// Safety net: the event stream is the fast path, but a dropped/never-opened SSE
+// connection used to leave the log frozen. Catch up from /api/log as well.
+let catchingUp = false;
+async function catchUp() {
+  if (catchingUp) return;
+  catchingUp = true;
+  try {
+    let res = await fetch('/api/log?since=' + lastSeq);
+    if (!res.ok) return;
+    let j = await res.json();
+    if (typeof j.seq === 'number' && j.seq < lastSeq) {
+      // The controller restarted: its sequence went backwards, so the lines we
+      // just asked for are not the ones it has. Start from the beginning.
+      lastSeq = 0; logEl.innerHTML = '';
+      res = await fetch('/api/log?since=0');
+      if (!res.ok) return;
+      j = await res.json();
+    }
+    for (const line of j.lines) acceptLine(line);
+  } catch {
+  } finally {
+    catchingUp = false;
+  }
+}
+setInterval(catchUp, 2000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) catchUp(); });
+catchUp();
+</script>
+</body>
+</html>
