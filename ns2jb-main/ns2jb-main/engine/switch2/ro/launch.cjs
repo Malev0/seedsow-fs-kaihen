@@ -937,34 +937,56 @@ async function main() {
             if (Date.now() - lastServedAt >= quietMs) break;
             continue;
           }
-          // The read unlinks its own domain entry and releases one reference.
-          // The pre-Read CopyObject kept the object alive, so restore the same
-          // slot from the removed record and serve the close. The FS releases
-          // the last reference and destroys the Loader's own file normally.
+          // The Read unlinked its own domain entry, so the close's id is no
+          // longer live. Restoring the slot made the close handler release the
+          // file object and fault the FS (11:10, 11:38, 11:51, 13:52, 14:11),
+          // even with two extra references and the donor reference. Instead,
+          // hide the id from the FS lookup: the domain manager's count at
+          // +0x10 bounds GetEntry (id > count -> invalid), so lower it to
+          // id-1 for exactly one synchronous serve, then restore it. The FS
+          // replies with an error for the already-freed id without touching the
+          // freed slot or the file object, so the close cannot fault.
           const current = await entries(memory, layout, root.targetDomain);
           if (!current.some(entry => entry.id === pendingInfo.object)) {
-            const recovered = await recoverRemovedEntry(pendingInfo.object).catch(error => {
-              (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
-              return null;
-            });
-            if (recovered) {
-              (proof.recoveredCloses ||= []).push({index: i, ...recovered});
-              console.log(JSON.stringify({stage: 'close-recovered', index: i, ...recovered}));
-              // Do not serve this close through the injected holder: the close
-              // handler faults on that path (11:38 spare, 11:51 own object).
-              // Hand the session back instead; gate.restore() writes the real
-              // wait handle and signals, so the FS's normal server loop receives
-              // and processes the queued close. The Loader then continues on its
-              // other session, so nothing after this needs the gate.
-              proof.closeHandedBack = true;
-              await save();
-              break;
-            } else {
-              (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object,
-                reason: 'close target is no longer in the target domain'});
-              if (Date.now() - lastServedAt >= quietMs) break;
-              continue;
+            if (process.env.NS2_LAUNCH_CLOSE_HANDBACK === '1') {
+              const recovered = await recoverRemovedEntry(pendingInfo.object).catch(error => {
+                (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
+                return null;
+              });
+              if (recovered) {
+                (proof.recoveredCloses ||= []).push({index: i, ...recovered});
+                console.log(JSON.stringify({stage: 'close-recovered', index: i, ...recovered}));
+                proof.closeHandedBack = true;
+                await save();
+                break;
+              }
             }
+            const countAddr = Number(layout.manager) + 0x10;
+            const original = await memory.read(countAddr, 4);
+            const originalCount = original.readUInt32LE();
+            const slot = Number(layout.table) + (pendingInfo.object - 1) * 0x30;
+            const slotBefore = await memory.read(slot, 0x30);
+            const hidden = Buffer.alloc(4);
+            hidden.writeUInt32LE(Math.max(0, pendingInfo.object - 1));
+            (proof.closeHidden ||= []).push({index: i, id: pendingInfo.object,
+              countAddr, originalCount, slot: slotBefore.toString('hex')});
+            await save();
+            let step;
+            try {
+              await memory.write(countAddr, original, hidden);
+              step = await gate.stepServe({force: true});
+            } finally {
+              await memory.write(countAddr, hidden, original);
+            }
+            (proof.closesServed ||= []).push({index: i, id: pendingInfo.object,
+              count: originalCount, empty: !!step.empty,
+              request: step.request ? step.request.slice(0, 64) : null});
+            await save();
+            console.log(JSON.stringify({stage: 'close-served-hidden', index: i,
+              id: pendingInfo.object, count: originalCount, empty: !!step.empty}));
+            lastBuffer = step.bufferAfterWake || step.request;
+            lastServedAt = Date.now(); sameWaits = 0;
+            continue;
           }
         }
         // A 24-byte IFile Read is the request that frees its own domain entry
