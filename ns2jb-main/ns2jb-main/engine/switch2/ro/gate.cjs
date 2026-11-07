@@ -276,17 +276,32 @@ class Gate {
     this.steps.push(step);
     step.request = (await this.memory.read(this.row.request, 0x100)).toString('hex');
     step.header = header.toString(16);
-    const result = await this.memory.request({command: 'retained-inject-holder',
-      server: this.row.address, holder: this.holder, wait: this.row.wait, primed: false,
-      parent: before.parent, vptr: this.vptr,
-      park: this.park, receive: this.row.receive, buffer: this.row.request,
-      domain: this.row.domain, metadata: this.row.metadata});
-    step.attempts.push(result);
-    if (result.injected) {
+    let injected = false;
+    for (let attempt = 0; attempt < 4 && !injected; attempt++) {
+      const current = await this.inspect();
+      check(current.state === 1 && this.waiters.includes(current.parent), 'Session is not idle on a known waiter');
+      const result = await this.memory.request({command: 'retained-inject-holder',
+        server: this.row.address, holder: this.holder, wait: this.row.wait, primed: false,
+        parent: current.parent, vptr: this.vptr,
+        park: this.park, receive: this.row.receive, buffer: this.row.request,
+        domain: this.row.domain, metadata: this.row.metadata});
+      step.attempts.push(result);
+      if (result.injected) { injected = true; break; }
+      if (result.acknowledged) break;
+      // A selected slot may already hold this session from the park wake. If it
+      // is ours, one wake serves it; otherwise retire the stale selection first.
+      if (result.selected !== undefined && result.selected === this.holder) {
+        injected = true; break;
+      }
+      await this.wake();
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    if (injected) {
       await this.wake();
       await new Promise(resolve => setTimeout(resolve, Number(process.env.NS2_GATE_SERVE_MS || 250)));
     }
     const after = await this.inspect();
+    step.injected = injected;
     step.sessionAfter = {state: after.state, receiveResult: after.receiveResult};
     step.finished = new Date().toISOString();
     delete this.outstanding;
