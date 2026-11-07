@@ -783,6 +783,40 @@ async function main() {
       return false;
     }
 
+    // Move every live entry from one domain list to another without touching
+    // the object references. Used to put the Loader's session domain where the
+    // adopted spare entry lives, so the close lookup and the entry's owning
+    // domain agree.
+    async function migrateDomain(from, to) {
+      if (from === to) return {moved: 0};
+      const fromSentinel = from + 0x20, toSentinel = to + 0x20;
+      const first = await memory.pointer(fromSentinel);
+      if (first === fromSentinel) return {moved: 0};
+      const last = await memory.pointer(fromSentinel + 0x08);
+      let at = first, moved = 0;
+      for (let n = 0; n < 128 && at !== fromSentinel; n++) {
+        const b = await memory.read(at, 0x30);
+        if (ptr(b, 0x18) !== from) throw Error('Domain entry owner changed during migration');
+        const updated = Buffer.from(b);
+        updated.writeBigUInt64LE(BigInt(to), 0x18);
+        await memory.write(at, b, updated);
+        at = ptr(b, 0x00);
+        moved++;
+      }
+      if (at !== fromSentinel) throw Error('Domain list did not terminate during migration');
+      const toFirst = await memory.pointer(toSentinel);
+      await memory.writeU64(last, fromSentinel, toFirst);
+      if (toFirst !== toSentinel) {
+        const p = await memory.pointer(toFirst + 0x08);
+        await memory.writeU64(toFirst + 0x08, p, last);
+      }
+      await memory.writeU64(toSentinel, toFirst, first);
+      await memory.writeU64(first + 0x08, fromSentinel, toSentinel);
+      await memory.writeU64(fromSentinel, first, fromSentinel);
+      await memory.writeU64(fromSentinel + 0x08, last, fromSentinel);
+      return {moved, first, last};
+    }
+
     async function recoverRemovedEntry(id) {
       let removed = null;
       for (let i = proof.requests.length - 1; i >= 0 && !removed; i--)
@@ -844,9 +878,9 @@ async function main() {
       const freed = targetDomain === 0 && targetObject === 0;
       if (!freed) {
         // The slot is still linked but its object is dead (the Read freed the
-        // object without unlinking the entry). Remove it from the target domain
-        // list before replacing it; the dead reference is not released.
-        if (targetDomain !== Number(root.targetDomain)) return null;
+        // object without unlinking the entry). Remove it from its domain list
+        // before replacing it; the dead reference is not released.
+        if (!(targetDomain >= 2 ** 32 && targetDomain < 2 ** 39)) return null;
         const tNext = ptr(targetBefore, 0x00), tPrev = ptr(targetBefore, 0x08);
         if (tNext === target || tPrev === target) return null;
         if (await memory.pointer(tPrev) !== target ||
@@ -919,9 +953,20 @@ async function main() {
       const readback = await memory.read(target, 0x30);
       if (ptr(readback, 0x18) !== spareDomain || ptr(readback, 0x20) !== object)
         return null;
+      // Put the Loader's session in the same domain as the adopted entry. The
+      // close handler looks the id up through the session's domain; leaving the
+      // session in targetDomain while the entry lives in the spare's domain is
+      // what still faulted at 21:40. Move the root/save-FS entries with it so
+      // the Loader's next OpenFile /main keeps working.
+      const migrated = await migrateDomain(Number(root.targetDomain), spareDomain);
+      const currentDomain = await memory.pointer(row.address + 0x70);
+      if (currentDomain !== spareDomain) {
+        await memory.writeU64(row.address + 0x70, currentDomain, spareDomain);
+        row.domain = spareDomain;
+      }
       const header = await memory.read(object, 0x80).then(b => b.toString('hex')).catch(() => null);
       return {id, slot: target, object, metadata, vptr, header, spare: spare.id,
-        copy: spare.handle, spareDomain, sNext};
+        copy: spare.handle, spareDomain, sNext, migrated, sessionDomain: spareDomain};
     }
 
     // The file Read removes its own domain entry and releases one reference.
