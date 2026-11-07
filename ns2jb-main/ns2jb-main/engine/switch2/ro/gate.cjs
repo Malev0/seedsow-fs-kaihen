@@ -19,6 +19,8 @@ class Gate {
     // selection is row.address - 0x88 (the holder base in front of the session
     // fields). retained-inject-holder must write this value, not row.address.
     this.holderDelta = Number(process.env.NS2_GATE_HOLDER_DELTA || 0x88);
+    check(Number.isInteger(this.holderDelta) && this.holderDelta > 0 && this.holderDelta < 0x1000,
+      'Invalid holder delta');
     this.holder = row.address - this.holderDelta;
     this.steps = [];
   }

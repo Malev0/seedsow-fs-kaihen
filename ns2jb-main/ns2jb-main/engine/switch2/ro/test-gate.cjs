@@ -78,15 +78,24 @@ async function main() {
     // Read-only holder probe BEFORE parking. The FS writes row.address - 0x88
     // into the waiter's selected slot on a natural wake; the probe records the
     // candidate before any injection can freeze the console. Before parking the
-    // session still holds the real wait handle, so the holder's +0x30 must equal
-    // row.wait; that check is the strongest identity test we have.
+    // session still holds the real wait handle, so handle == sessionWait is the
+    // cleanest identity test. If the field is not the handle, stop here and keep
+    // the raw bytes instead of risking an injection.
     result.holderProbe = await memory.request({command: 'retained-holder-probe',
       server: row.address, holder: gate.holder});
+    result.holderProbe.handleMatches = result.holderProbe.handle === row.wait;
     await save();
     console.log('holder probe', JSON.stringify(result.holderProbe));
-    check(result.holderProbe.userData === '1' && result.holderProbe.defer === 0 &&
-      result.holderProbe.handle === row.wait,
-      'Holder candidate at row-0x88 is not the session holder; refusing to inject');
+    check(result.holderProbe.userData === '1' && result.holderProbe.defer === 0,
+      'Holder candidate at row-0x88 is not a session holder; refusing to inject');
+    if (!result.holderProbe.handleMatches) {
+      result.stopped = 'holder-probe';
+      result.verified = false;
+      await save();
+      console.log(JSON.stringify({file, verified: false, restored: true,
+        stopped: 'holder-probe', attempts: []}));
+      return;
+    }
     result.park = await gate.parkSession(); await save();
     console.log('parked', result.park);
     // Where does the FS actually keep the wait handle? The session points at one
