@@ -794,50 +794,34 @@ async function main() {
       return {id, slot, object: removed.object, metadata: removed.metadata, vptr, sNext};
     }
 
-    // The Read frees the file object itself: the removed record's object now
-    // reads back as heap data (0x8), so it cannot be restored. Open a throwaway
-    // file in the donor filesystem's domain, add a second reference with
-    // CopyObject, and point the freed slot at that live object instead. The FS
-    // releases one reference when it serves the close; the copy handle keeps the
-    // object alive, and the donor save filesystem the Loader still needs for
-    // /main is never touched.
-    async function spareEntryForClose(id) {
-      const table = Number(layout.table), count = Number(layout.count);
-      if (!Number.isInteger(id) || id <= 0 || id > count) return null;
-      const slot = table + (id - 1) * 0x30;
-      const b = await memory.read(slot, 0x30);
-      if (ptr(b, 0x18) !== 0 || ptr(b, 0x20) !== 0) return null;
-      // Take the freed slot off the free list first: the spare file allocation
-      // would otherwise reuse the free-list head (this same slot) and the FS
-      // would put the spare in the donor domain instead of the target domain.
-      if (!await unlinkFree(slot).catch(() => false)) return null;
-      const spare = await memory.request({command: 'root-native-file-spare', name: 'main.npdm'});
-      const spareSlot = table + (spare.id - 1) * 0x30;
-      const sb = await memory.read(spareSlot, 0x30);
-      const object = ptr(sb, 0x20), metadata = ptr(sb, 0x28);
-      if (!(object >= 2 ** 32 && object < 2 ** 39) ||
-          !(metadata >= 2 ** 32 && metadata < 2 ** 39)) return null;
-      const vptr = await memory.pointer(object);
-      if (!(vptr >= 2 ** 32 && vptr < 2 ** 39)) return null;
-      const sentinel = Number(root.targetDomain) + 0x20;
-      const sNext = await memory.pointer(sentinel);
-      const updated = Buffer.from(b);
-      updated.writeBigUInt64LE(BigInt(sNext), 0x00);
-      updated.writeBigUInt64LE(BigInt(sentinel), 0x08);
-      updated.writeBigUInt64LE(0n, 0x10);
-      updated.writeBigUInt64LE(BigInt(root.targetDomain), 0x18);
-      updated.writeBigUInt64LE(BigInt(object), 0x20);
-      updated.writeBigUInt64LE(BigInt(metadata), 0x28);
-      await memory.write(slot, b, updated);
-      if (sNext !== sentinel) {
-        const prev = (await memory.read(sNext + 0x08, 8)).readBigUInt64LE();
-        await memory.writeU64(sNext + 0x08, Number(prev), slot);
+    // The file Read removes its own domain entry and releases one reference.
+    // If that was the last reference the file object is freed and the Loader's
+    // close dereferences dead memory (11:10) or, when we substitute a different
+    // file, the cross-domain release faults the FS (11:38). Keep the Loader's
+    // own object alive: before the Read, briefly expose it through our
+    // inspection-domain slot and CopyObject it, then restore the slot. The Read
+    // drops the entry reference (2 -> 1); the close later releases the last one
+    // and destroys the same object normally, exactly like an ungated close.
+    async function addObjectReference(entry) {
+      const owned = await memory.request({command: 'root-native-domain-open'});
+      const ownEntry = Number(layout.table) + (Number(owned.root) - 1) * 0x30;
+      const original = await memory.read(ownEntry, 0x30);
+      const borrowed = Buffer.from(original);
+      borrowed.writeBigUInt64LE(BigInt(entry.object), 0x20);
+      borrowed.writeBigUInt64LE(BigInt(entry.metadata), 0x28);
+      await memory.write(ownEntry, original, borrowed);
+      let copy;
+      try {
+        copy = await memory.request({command: 'root-native-domain-copy',
+          handle: Number(owned.handle), object: Number(owned.root)});
+      } finally {
+        await memory.write(ownEntry, borrowed, original);
       }
-      await memory.writeU64(sentinel, sNext, slot);
-      const readback = await memory.read(slot, 0x30);
-      if (ptr(readback, 0x18) !== Number(root.targetDomain) || ptr(readback, 0x20) !== object)
-        return null;
-      return {id, slot, object, metadata, vptr, sNext, spare: spare.id, copy: spare.handle};
+      check((await memory.read(ownEntry, 0x30)).equals(original),
+        'Inspection slot did not restore after the reference copy');
+      check(Number(copy.handle) > 0, 'Reference copy returned no handle');
+      return {entry: entry.id, object: entry.object, metadata: entry.metadata,
+        copy: Number(copy.handle), at: new Date().toISOString()};
     }
 
     const launchSlot = flags === 0x10 ? 2 : 1;
@@ -910,18 +894,13 @@ async function main() {
             if (Date.now() - lastServedAt >= quietMs) break;
             continue;
           }
-          // The read unlinks its own domain entry, zeroes +0x18/+0x20 and frees
-          // the file object itself, so the removed record cannot be restored.
-          // Point the freed slot at a fresh throwaway file object (with an extra
-          // CopyObject reference) and serve the close so the Loader's NPDM thread
-          // finishes and the deferred pm:dmnt start can return. If neither a
-          // spare object nor the removed record looks live, leave it stale.
+          // The read unlinks its own domain entry and releases one reference.
+          // The pre-Read CopyObject kept the object alive, so restore the same
+          // slot from the removed record and serve the close. The FS releases
+          // the last reference and destroys the Loader's own file normally.
           const current = await entries(memory, layout, root.targetDomain);
           if (!current.some(entry => entry.id === pendingInfo.object)) {
-            const recovered = await spareEntryForClose(pendingInfo.object).catch(error => {
-              (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
-              return null;
-            }) || await recoverRemovedEntry(pendingInfo.object).catch(error => {
+            const recovered = await recoverRemovedEntry(pendingInfo.object).catch(error => {
               (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
               return null;
             });
@@ -935,6 +914,26 @@ async function main() {
               if (Date.now() - lastServedAt >= quietMs) break;
               continue;
             }
+          }
+        }
+        // A 24-byte IFile Read is the request that frees its own domain entry
+        // and releases one reference. Add a reference first so the object
+        // survives until the Loader's close releases it.
+        if (pendingInfo?.kind === 'request' && pendingInfo.command === 0 &&
+            pendingInfo.input && pendingInfo.input.length === 48 &&
+            !(proof.readRefs || []).some(ref => ref.entry === pendingInfo.object)) {
+          try {
+            const current = await entries(memory, layout, root.targetDomain);
+            const target = current.find(entry => entry.id === pendingInfo.object);
+            if (target && target.metadata === Number(donor.metadata) + 8) {
+              const ref = await addObjectReference(target);
+              (proof.readRefs ||= []).push(ref);
+              await save();
+              console.log(JSON.stringify({stage: 'read-reference', index: i, ...ref}));
+            }
+          } catch (error) {
+            (proof.referenceErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
+            await save();
           }
         }
         if (pendingInfo)
