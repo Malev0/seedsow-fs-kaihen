@@ -809,6 +809,8 @@ async function main() {
       if (toFirst !== toSentinel) {
         const p = await memory.pointer(toFirst + 0x08);
         await memory.writeU64(toFirst + 0x08, p, last);
+      } else {
+        await memory.writeU64(toSentinel + 0x08, toSentinel, last);
       }
       await memory.writeU64(toSentinel, toFirst, first);
       await memory.writeU64(first + 0x08, fromSentinel, toSentinel);
