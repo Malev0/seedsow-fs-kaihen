@@ -68,9 +68,16 @@ async function activate(launchFile) {
   // launch, so calling pm:dmnt id 1 again is unnecessary (and dangerous on a
   // manipulated FS). Only the suspended launch needs the explicit start.
   if (launch.flags === 0x10) {
-    proof.pending = 'start replacement'; await save(file, proof);
-    proof.start = await ipc(monitor, 1, proof.pid); await save(file, proof);
-    check(!proof.start.result, 'The accepted RO process did not start');
+    // ro/launch now triggers the start inside the serve-gate window so the
+    // mount can be observed and swapped. Reuse that start instead of calling
+    // pm:dmnt id 1 a second time.
+    if (launch.start && !launch.start.result) {
+      proof.start = launch.start; proof.startReused = true; await save(file, proof);
+    } else {
+      proof.pending = 'start replacement'; await save(file, proof);
+      proof.start = await ipc(monitor, 1, proof.pid); await save(file, proof);
+      check(!proof.start.result, 'The accepted RO process did not start');
+    }
   }
   proof.pending = 'terminate identified original'; await save(file, proof);
   proof.termination = await ipc(shell, 1, originalPid); await save(file, proof);

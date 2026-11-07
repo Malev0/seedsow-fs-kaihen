@@ -18,6 +18,7 @@ const {connect, encodeU64} = require("../tools/fs-memory.cjs");
 const {exportHandle} = require("./export-handle.cjs");
 const {Gate} = require("./gate.cjs");
 const wire = require("../../shared/domain.cjs");
+const {response} = require("../../shared/ipc.cjs");
 const check = (ok, message) => { if (!ok) throw Error(message); };
 const ptr = (b, o = 0) => Number(b.readBigUInt64LE(o));
 
@@ -456,7 +457,31 @@ async function main() {
       // the pipeline's own 300 s script limit still fit.
       const deadline = Date.now() + Number(process.env.NS2_LAUNCH_TIMEOUT_MS || 120000);
       const rootId = (root.targetEntry - layout.table) / 0x30 + 1;
+      // flags 0x10 = StartSuspended: the launch creates the process but does no
+      // FS work, so the mount is deferred to the pm:dmnt start (late 47). Trigger
+      // that start here, while the serve gate is still armed, instead of in the
+      // later Start RO payload stage where the table is no longer watched.
+      const monitor = state.services.find(x => x.name === 'pm:dmnt')?.handle;
+      let startSent = false;
       while (Date.now() < deadline) {
+        if (flags === 0x10 && !startSent && monitor) {
+          try {
+            const peek = await memory.request({command: 'root-native-worker-peek'});
+            if (peek.values.every(value => value !== peek.sentinel)) {
+              const raw = Buffer.from(peek.responses[0], 'hex');
+              const reply = response(raw);
+              const pid = reply.data && reply.data.length >= 8
+                ? reply.data.readBigUInt64LE().toString() : null;
+              if (reply.result === 0 && pid) {
+                proof.start = await memory.request({command: 'root-native-ipc', handle: monitor,
+                  id: 1, hex: encodeU64(BigInt(pid)).toString('hex')});
+                proof.startPid = pid; startSent = true;
+                await save();
+                console.log(JSON.stringify({stage: 'launch-start', pid, result: proof.start.result}));
+              } else proof.startWaiting = {result: reply.result, pid};
+            }
+          } catch (error) { proof.startError = error.message; await save(); }
+        }
         await new Promise(resolve => setTimeout(resolve, Number(process.env.NS2_LAUNCH_POLL_MS || 20)));
         let current;
         try { current = await entries(memory, layout, root.targetDomain); }
