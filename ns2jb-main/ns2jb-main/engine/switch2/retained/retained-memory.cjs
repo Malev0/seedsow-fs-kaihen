@@ -418,7 +418,10 @@ async function access(context, state, request) {
     check(defer === 0, 'Holder is marked deferred');
     check(handle === Number(request.wait), 'Holder wait handle differs');
     const header = (await readMemory(context, state, Number(request.buffer), 4)).readUInt32LE();
-    if (header !== 0xffffffff) return {injected: false, acknowledged: true, header, holderProof: proof};
+    // step() primes the header to 0xffffffff; stepServe() keeps the real queued
+    // request, so only the primed path treats a non-empty header as consumed.
+    if (request.primed !== false && header !== 0xffffffff)
+      return {injected: false, acknowledged: true, header, holderProof: proof};
     await setPointer(context, state, parent + 0x10);
     const entry = {id: state.operations.length + 1, command, server, holder, parent,
       epoch: waiter.readBigUInt64LE(8).toString(), holderProof: proof,

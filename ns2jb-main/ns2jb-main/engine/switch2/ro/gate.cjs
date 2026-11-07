@@ -235,7 +235,7 @@ class Gate {
       }
       if (!force) check(await this.pending() === !empty, 'Server readiness changed before receipt');
       const result = await this.memory.request({command: 'retained-inject-holder',
-        server: this.row.address, holder: this.holder, wait: this.row.wait,
+        server: this.row.address, holder: this.holder, wait: this.row.wait, primed: true,
         parent: session.parent, vptr: this.vptr,
         park: this.park, receive: this.row.receive, buffer: this.row.request,
         domain: this.row.domain, metadata: this.row.metadata});
@@ -265,7 +265,7 @@ class Gate {
     step.request = (await this.memory.read(this.row.request, 0x100)).toString('hex');
     step.header = header.toString(16);
     const result = await this.memory.request({command: 'retained-inject-holder',
-      server: this.row.address, holder: this.holder, wait: this.row.wait,
+      server: this.row.address, holder: this.holder, wait: this.row.wait, primed: false,
       parent: before.parent, vptr: this.vptr,
       park: this.park, receive: this.row.receive, buffer: this.row.request,
       domain: this.row.domain, metadata: this.row.metadata});
