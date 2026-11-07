@@ -278,7 +278,7 @@ async function main() {
         // zero address; the working bind uses the same 16-byte layout.
         const make = (ip, port, little) => {
           const sa = Buffer.alloc(16);
-          sa[0] = 2; sa.writeUInt16BE(port, 2);
+          sa[0] = 16; sa[1] = 2; sa.writeUInt16BE(port, 2);
           if (little) sa.writeUInt32LE(ip >>> 0, 4); else sa.writeUInt32BE(ip >>> 0, 4);
           return sa.toString('hex');
         };

@@ -163,7 +163,7 @@ async function dispatch(context, request, state, domain) {
       sa = Buffer.from(request.sockaddr, 'hex');
     } else {
       sa = Buffer.alloc(16);
-      sa[0] = 2; sa.writeUInt16BE(Number(request.port || 39401), 2);
+      sa[0] = 16; sa[1] = 2; sa.writeUInt16BE(Number(request.port || 39401), 2);
       if (request.little) sa.writeUInt32LE(Number(request.pcAddress) >>> 0, 4);
       else sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
     }
@@ -217,7 +217,7 @@ async function dispatch(context, request, state, domain) {
         const payload = Buffer.from('SEEDSOW-TCP-TEST\n');
         await s.write(area + 0x10000, payload);
         const sa = Buffer.alloc(16);
-        sa[0] = 2; sa.writeUInt16BE(Number(request.port), 2);
+        sa[0] = 16; sa[1] = 2; sa.writeUInt16BE(Number(request.port), 2);
         sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
         await s.write(area + 0x1800, sa);
         const socketIndex = calls.length;
@@ -350,7 +350,7 @@ async function dispatch(context, request, state, domain) {
       // Send the captured window straight to the PC. This is the only channel
       // that works while the slot-1 launch send holds the launcher shim.
       const sa = Buffer.alloc(16);
-      sa[0] = 2; sa.writeUInt16BE(Number(request.port), 2);
+      sa[0] = 16; sa[1] = 2; sa.writeUInt16BE(Number(request.port), 2);
       sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
       await s.write(area + 0x1800, sa);
       const socketIndex = calls.length;
