@@ -348,15 +348,17 @@ async function main() {
       let previous = await entries(memory, layout, root.targetDomain);
       proof.baseline = previous.length;
       if (watch) {
-        // The retained cache maps a fixed plan readOffset to the plan target.
-        // Retarget it to the window while the shim is free, then tell the
-        // worker that exact storage offset. The pre-launch window is the
-        // baseline the post-launch dump is compared against.
+        // The installed signed plan maps logical offset L to bias + L over a
+        // very wide range; that linear form is what the proven retained-read
+        // path uses. Read the window at windowAddress - bias. A freshly
+        // computed plan's readOffset is only valid once its header is written
+        // to the cache, which this stage does not do: the 00:56 run passed
+        // readOffset 0 and would have read the cache array, not the window.
         const storageSize = Number(memory.report.storageSize);
-        const cycle = Number(memory.report.retainedMemory.bootstrapPlan.cycle || 0x28000);
-        const next = require('../memory/signed-cache-plan.cjs')
-          .plan(proof.watch.windowAddress, storageSize, cycle);
-        proof.watch.readOffset = next.readOffset;
+        proof.watch.readOffset = proof.watch.windowAddress - proof.watch.bias;
+        check(proof.watch.readOffset >= 0 &&
+          proof.watch.readOffset + proof.watch.windowLength <= storageSize,
+          'Window offset is outside the retained storage');
         const before = await memory.read(proof.watch.windowAddress, proof.watch.windowLength);
         proof.watch.preLaunchSha256 = require('node:crypto').createHash('sha256')
           .update(before).digest('hex');
@@ -387,7 +389,11 @@ async function main() {
         // The slot-2 worker's reads landed in app memory during the load. Read
         // them first: this is the data the retained endpoint cannot reach while
         // the slot-1 send holds the shim.
-        if (proof.watch) {
+        // The socket dump is the primary channel. Reading the worker buffer
+        // through the shim after the load wedged the endpoint in the 00:56 run
+        // (60 s timeout, then every later request saw "active"), which cost the
+        // post-launch table scan. Keep it opt-in for debugging only.
+        if (proof.watch && process.env.NS2_LAUNCH_WORKER_OUTPUT === '1') {
           try {
             proof.watch.sentinel = await memory.request({command: 'root-native-worker-output', slot: 2,
               offset: 0x1100, length: 16});

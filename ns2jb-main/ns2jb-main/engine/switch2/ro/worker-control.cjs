@@ -209,6 +209,21 @@ async function dispatch(context, request, state, domain) {
     const upload = batchInputs ? Buffer.alloc(count * 0x1000) : null;
     check(['control-test', 'cmif-control', 'pm-launch', 'pm-start', 'sm-get', 'app-service', 'ro-probe', 'ro-process', 'notifier-probe', 'retained-read', 'retained-write', 'retained-dump', 'tcp-test'].includes(request.kind), 'Unknown worker operation');
     const calls = [{function: live.sdk + events.code.wait.offset, args: [gate, 0, 0, 0]}];
+    // Connect before any FS traffic. svcSendSyncRequest (the worker's retained
+    // read) blocks until the FS server replies, and the flags-0 load holds that
+    // server, so a post-read connect never runs. The tcp-test worker (no FS
+    // read) connected immediately; the retained-dump worker did not.
+    let dumpSocket = -1;
+    if (request.kind === 'retained-dump') {
+      const sa = Buffer.alloc(16);
+      sa[0] = 16; sa[1] = 2; sa.writeUInt16BE(Number(request.port), 2);
+      sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
+      await s.write(area + 0x1800, sa);
+      dumpSocket = calls.length;
+      calls.push({function: live.sdk + SOCK.socket, args: [2, 1, 0, 0]});      // socket
+      calls.push({function: live.sdk + SOCK.connect,
+        args: [{result: dumpSocket}, area + 0x1800, 16, 0]});                  // connect
+    }
     for (let i = 0; i < count; i++) {
       let bytes;
       const address = area + 0x1000 * (i + 1);
@@ -310,9 +325,9 @@ async function dispatch(context, request, state, domain) {
         if (i + 1 < count) calls.push({function: live.sdk + 0x168b54, args: [delay, 0, 0, 0]});
         continue;
       } else if (request.kind === 'retained-dump') {
-        // The retained cache maps a fixed storage readOffset to the plan target;
-        // an arbitrary address-bias offset reads storage file data, not FS
-        // memory. The host pre-retargets to the window and passes its readOffset.
+        // The installed signed plan maps logical offset L to addressBias + L
+        // over a wide range (the same linear form retained-read uses), so the
+        // host passes windowAddress - addressBias here.
         const offset = BigInt(request.readOffset);
         check(offset >= 0n, 'Retained dump needs a plan readOffset');
         check(Number.isInteger(request.length) && request.length > 0 && request.length <= 0x4000,
@@ -347,18 +362,10 @@ async function dispatch(context, request, state, domain) {
     }
     if (upload) await s.write(area + 0x1000, upload);
     if (request.kind === 'retained-dump') {
-      // Send the captured window straight to the PC. This is the only channel
-      // that works while the slot-1 launch send holds the launcher shim.
-      const sa = Buffer.alloc(16);
-      sa[0] = 16; sa[1] = 2; sa.writeUInt16BE(Number(request.port), 2);
-      sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
-      await s.write(area + 0x1800, sa);
-      const socketIndex = calls.length;
-      calls.push({function: live.sdk + SOCK.socket, args: [2, 1, 0, 0]});      // socket
-      calls.push({function: live.sdk + SOCK.connect,
-        args: [{result: socketIndex}, area + 0x1800, 16, 0]});                // connect
+      // The socket was opened before the read. Send the captured window now;
+      // the listener saves on EOF or a short idle gap.
       calls.push({function: live.sdk + SOCK.send,
-        args: [{result: socketIndex}, area + 0x10000, Number(request.length), 0]}); // send
+        args: [{result: dumpSocket}, area + 0x10000, Number(request.length), 0]}); // send
       // Do not close here. The tcp-test run showed the app aborts right after a
       // successful worker-thread socket send+close; the listener saves on EOF
       // or after a short idle gap, so leaving the fd open costs nothing and may
