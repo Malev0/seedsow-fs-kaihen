@@ -977,7 +977,10 @@ async function main() {
                 metadata: donor.metadata, file: recovered.object};
               await save();
               try {
-                const step = await gate.stepServe({force: true});
+                // Skip the post-serve buffer/inspect reads: once the close is
+                // consumed the FS can start the Loader's next OpenFile and the
+                // read races it into "Another memory request is active" (20:16).
+                const step = await gate.stepServe({force: true, skipAfter: true});
                 (proof.closesServed ||= []).push({index: i, id: pendingInfo.object,
                   empty: !!step.empty, request: step.request ? step.request.slice(0, 64) : null});
                 await save();

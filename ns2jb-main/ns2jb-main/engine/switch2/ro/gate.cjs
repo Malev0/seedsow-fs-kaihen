@@ -264,7 +264,7 @@ class Gate {
   // step, so wiping the header would destroy it. The session stays parked, so
   // the FS serves only when we inject; that leaves the host free to swap the
   // domain entry between two requests.
-  async stepServe({force = false} = {}) {
+  async stepServe({force = false, skipAfter = false} = {}) {
     check(this.parked && !this.outstanding, 'Gate is not parked or an earlier step is unresolved');
     const before = await this.inspect();
     check(before.state === 1 && this.waiters.includes(before.parent), 'Session is not idle on a known waiter');
@@ -305,14 +305,22 @@ class Gate {
       // the client has queued a new request or the buffer still holds a
       // consumed one. A consumed close is additionally rejected by its domain
       // entry being gone, so a double-close can never be re-injected.
-      try { step.bufferAfterWake = (await this.memory.read(this.row.request, 0x100)).toString('hex'); }
-      catch (error) { step.bufferAfterWakeError = error.message; }
-      await new Promise(resolve => setTimeout(resolve, Number(process.env.NS2_GATE_SERVE_MS || 250)));
+      // skipAfter is for the close serve: once the FS has consumed the close,
+      // the post-serve read can race the FS's next OpenFile and wedge the
+      // endpoint (20:16), so the close path does not read anything after the
+      // wake.
+      if (!skipAfter) {
+        try { step.bufferAfterWake = (await this.memory.read(this.row.request, 0x100)).toString('hex'); }
+        catch (error) { step.bufferAfterWakeError = error.message; }
+        await new Promise(resolve => setTimeout(resolve, Number(process.env.NS2_GATE_SERVE_MS || 250)));
+      }
     }
-    const after = await this.inspect();
+    if (!skipAfter) {
+      const after = await this.inspect();
+      step.sessionAfter = {state: after.state, receiveResult: after.receiveResult};
+    }
     step.injected = injected;
     step.empty = !injected && step.attempts.some(attempt => attempt.empty);
-    step.sessionAfter = {state: after.state, receiveResult: after.receiveResult};
     step.finished = new Date().toISOString();
     delete this.outstanding;
     return step;
