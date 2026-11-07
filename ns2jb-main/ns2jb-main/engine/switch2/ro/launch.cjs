@@ -1237,14 +1237,14 @@ async function main() {
           }
         }
         // A 24-byte IFile Read frees its own domain entry and releases the
-        // entry's reference. The earlier design added two CopyObject references
-        // so a *restored* entry could survive the close; with the freed-slot
-        // close that is not needed and is actively harmful: the file object is
-        // never destroyed, so its save-data transaction stays open and the
-        // Loader's next OpenFile (/main) on the same donor filesystem wedges the
-        // FS (22:57 run). Let the Read drop the last reference and run the
-        // file's destructor normally. Opt back in for the restore experiments.
-        if (process.env.NS2_LAUNCH_READ_REFERENCE === '1' &&
+        // entry's reference. Two CopyObject references are added first so the
+        // object survives the Read. This is required: with the references off
+        // (23:10 run) the Read's destructor ran, and the freed-slot close's
+        // UnregisterObject then wedged the FS at the wake's event-clear. Keep
+        // the object alive; the close is a no-op on the freed slot and the
+        // Loader's next OpenFile is served immediately (poll reordered below).
+        // `NS2_LAUNCH_READ_REFERENCE=0` disables it for experiments.
+        if (process.env.NS2_LAUNCH_READ_REFERENCE !== '0' &&
             pendingInfo?.kind === 'request' && pendingInfo.command === 0 &&
             pendingInfo.input && pendingInfo.input.length === 48 &&
             !(proof.readRefs || []).some(ref => ref.entry === pendingInfo.object)) {
