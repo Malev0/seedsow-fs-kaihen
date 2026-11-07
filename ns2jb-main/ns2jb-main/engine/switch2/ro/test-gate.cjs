@@ -294,6 +294,22 @@ async function main() {
       result.restoration = gate.restoration;
       result.restored = true; await save();
     }
+    // A control-test worker left by the inject-once stop must be settled before
+    // ro/launch prepares its own slot-1 worker. worker-settle parses the stored
+    // replies and marks the slot reusable without TryWaitThread (which blocks on
+    // this build). The second clone is served by the restore above, so retry
+    // briefly while its result cell lands.
+    if (result.stopped === 'inject-once' && workerTest) {
+      for (let i = 0; i < 20 && !result.workerSettle; i++) {
+        try {
+          result.workerSettle = await memory.request({command: 'root-native-worker-settle'});
+        } catch (error) {
+          result.workerSettleError = error.message;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      await save();
+    }
   }
   if (result.stopped !== 'wake-only' && result.stopped !== 'unpark-first' &&
       process.env.NS2_GATE_STEP_MODE !== 'prime') {
