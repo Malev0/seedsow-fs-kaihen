@@ -75,15 +75,20 @@ async function main() {
     const workerTest = process.env.NS2_GATE_WORKER === '1';
     if (workerTest)
       result.worker = await memory.request({command: 'root-native-worker-prepare', kind: 'control-test', handle: state.inspectionDomain.handle});
-    result.park = await gate.parkSession(); await save();
-    console.log('parked', result.park);
-    // Read-only holder probe: the FS writes row.address - 0x88 into the waiter's
-    // selected slot on a natural wake. Record the candidate before any inject so
-    // a freeze cannot hide the evidence.
+    // Read-only holder probe BEFORE parking. The FS writes row.address - 0x88
+    // into the waiter's selected slot on a natural wake; the probe records the
+    // candidate before any injection can freeze the console. Before parking the
+    // session still holds the real wait handle, so the holder's +0x30 must equal
+    // row.wait; that check is the strongest identity test we have.
     result.holderProbe = await memory.request({command: 'retained-holder-probe',
       server: row.address, holder: gate.holder});
     await save();
     console.log('holder probe', JSON.stringify(result.holderProbe));
+    check(result.holderProbe.userData === '1' && result.holderProbe.defer === 0 &&
+      result.holderProbe.handle === row.wait,
+      'Holder candidate at row-0x88 is not the session holder; refusing to inject');
+    result.park = await gate.parkSession(); await save();
+    console.log('parked', result.park);
     // Where does the FS actually keep the wait handle? The session points at one
     // 0x110-byte waiter entry; dumping it and searching for the three known
     // handles tells us whether the wait argument is stored there (and can be
