@@ -114,6 +114,9 @@ function startLiveness(proof, save, durationMs) {
 }
 
 async function main() {
+  // Fail fast when the control thread wedges instead of holding a stage for a
+  // full minute.
+  process.env.NS2_MEMORY_TIMEOUT_MS ||= '15000';
   const memory = await connect();
   const read = suffix => fs.readFile(path.join(__dirname, memory.info.session + suffix)).then(JSON.parse);
   const layout = await read('-layout.json'), root = await read('-loader-root-copy.json');
@@ -708,11 +711,10 @@ async function main() {
     const deadline = Date.now() + 240000;
     for (let i = 0; i < 160; i++) {
       if (flags === 0x10) {
-        // wait-zero on the readiness handle hangs while the session is parked.
-        // Wait host-side and read the queued header directly in stepWake.
-        await new Promise(resolve => setTimeout(resolve, Number(process.env.NS2_LAUNCH_GATE_MS || 500)));
-        const peek = await memory.request({command: 'root-native-worker-peek', slot: 2});
-        if (peek.values.every(value => value !== peek.sentinel)) break;
+        // No worker-peek here: reading the worker's response area while it is
+        // inside svcSendSyncRequest may be what wedges the control thread.
+        // Let stepWake's retained inspect/header read be the first RPC.
+        await new Promise(resolve => setTimeout(resolve, Number(process.env.NS2_LAUNCH_GATE_MS || 1000)));
       } else {
         while (!await gate.pending()) {
           const worker = await memory.request({command: 'root-native-worker-state'});
