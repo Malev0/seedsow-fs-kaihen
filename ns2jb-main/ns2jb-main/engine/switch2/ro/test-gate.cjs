@@ -75,19 +75,18 @@ async function main() {
     const workerTest = process.env.NS2_GATE_WORKER === '1';
     if (workerTest)
       result.worker = await memory.request({command: 'root-native-worker-prepare', kind: 'control-test', handle: state.inspectionDomain.handle});
-    // Read-only holder probe BEFORE parking. The FS writes row.address - 0x88
-    // into the waiter's selected slot on a natural wake; the probe records the
-    // candidate before any injection can freeze the console. Before parking the
-    // session still holds the real wait handle, so handle == sessionWait is the
-    // cleanest identity test. If the field is not the handle, stop here and keep
-    // the raw bytes instead of risking an injection.
+    // Read-only holder probe BEFORE parking. The FS wait chain links the session
+    // object itself, so the holder is the bound row. Before parking the session
+    // still holds the real wait handle, so handle == sessionWait is the cleanest
+    // identity test. Stop before any injection if it differs.
     result.holderProbe = await memory.request({command: 'retained-holder-probe',
       server: row.address, holder: gate.holder});
     result.holderProbe.handleMatches = result.holderProbe.handle === row.wait;
+    result.holderProbe.vptrMatches = result.holderProbe.vptr === gate.vptr.toString();
     await save();
     console.log('holder probe', JSON.stringify(result.holderProbe));
-    check(result.holderProbe.userData === '1' && result.holderProbe.defer === 0,
-      'Holder candidate at row-0x88 is not a session holder; refusing to inject');
+    check(result.holderProbe.userData === '1' && result.holderProbe.vptrMatches,
+      'Holder candidate is not the bound session object; refusing to inject');
     if (!result.holderProbe.handleMatches) {
       result.stopped = 'holder-probe';
       result.verified = false;

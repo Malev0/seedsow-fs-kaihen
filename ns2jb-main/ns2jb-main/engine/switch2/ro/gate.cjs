@@ -14,12 +14,14 @@ class Gate {
     check(waiters.length === 7 && waiters.every((address, i) => address === waiters[0] + i * 0x110),
       'Expected the verified contiguous native waiter array');
     this.serverCopy = serverCopy;
-    // The FS writes the *holder* pointer into the waiter's selected slot when a
-    // wait completes. It is not the session row we bound: the observed natural
-    // selection is row.address - 0x88 (the holder base in front of the session
-    // fields). retained-inject-holder must write this value, not row.address.
-    this.holderDelta = Number(process.env.NS2_GATE_HOLDER_DELTA || 0x88);
-    check(Number.isInteger(this.holderDelta) && this.holderDelta > 0 && this.holderDelta < 0x1000,
+    // The FS wait chain links the session object itself: in the saved heap
+    // capture every linked holder has the same vptr/layout as the bound row
+    // (vptr, +0x30 wait handle, +0x38 user data 1, +0x70 domain). The earlier
+    // `row - 0x88` observation was a *different* session object sitting in the
+    // preceding 0x88 slot, so it was a stale/other selection, not this session's
+    // holder. Default delta 0; override only if a boot proves otherwise.
+    this.holderDelta = Number(process.env.NS2_GATE_HOLDER_DELTA || 0);
+    check(Number.isInteger(this.holderDelta) && this.holderDelta >= 0 && this.holderDelta < 0x1000,
       'Invalid holder delta');
     this.holder = row.address - this.holderDelta;
     this.steps = [];

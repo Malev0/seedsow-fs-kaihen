@@ -695,14 +695,17 @@ async function main() {
         await new Promise(resolve => setTimeout(resolve, 25));
       }
       check(pid, 'The suspended launch returned no pid');
-      // Probe the holder before parking: the session still holds the real wait
-      // handle, so +0x30 must equal row.wait. Refuse to inject a wrong object.
+      // Probe the holder before parking: the FS wait chain links the session
+      // object itself, and before parking the session still holds the real wait
+      // handle. Refuse to inject if the object or handle differs.
       proof.holderProbe = await memory.request({command: 'retained-holder-probe',
         server: row.address, holder: gate.holder}); await save();
+      proof.holderProbe.handleMatches = proof.holderProbe.handle === row.wait;
+      proof.holderProbe.vptrMatches = proof.holderProbe.vptr === gate.vptr.toString();
       console.log(JSON.stringify({stage: 'holder-probe', ...proof.holderProbe, raw: undefined}));
-      check(proof.holderProbe.userData === '1' && proof.holderProbe.defer === 0 &&
-        proof.holderProbe.handle === row.wait,
-        'Holder candidate at row-0x88 is not the session holder; refusing to inject');
+      check(proof.holderProbe.userData === '1' && proof.holderProbe.vptrMatches &&
+        proof.holderProbe.handleMatches,
+        'Holder candidate is not the bound session object; refusing to inject');
       await gate.parkSession(); proof.parked = true; await save();
       proof.startWorker = await memory.request({command: 'root-native-worker-prepare', slot: 2,
         areaOffset: 0x100000, kind: 'pm-start', handle: monitor, pid: Number(pid)});

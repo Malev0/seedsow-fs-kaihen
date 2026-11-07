@@ -378,12 +378,11 @@ async function access(context, state, request) {
     const control = require("../ro/worker-control.cjs");
     await context.s.verifyCode(control.cancelCode, 'CancelSynchronization');
     const server = Number(request.server), parent = Number(request.parent);
-    // The FS stores the *holder* pointer in the waiter's selected slot when a
-    // wait completes; the observed natural selection is server - 0x88, not the
-    // session row. Writing server made ProcessAsSession dereference a session
-    // 0x88 into the object and hard-froze the console. Use the holder base and
-    // verify it before the store.
-    const holder = Number(request.holder ?? server - 0x88);
+    // The FS wait chain links the session object itself (verified from the saved
+    // heap capture: linked holders have the same vptr/layout as the bound row).
+    // So the holder is the session row by default. A different `holder` is
+    // accepted only after the extra checks below.
+    const holder = Number(request.holder ?? server);
     // Check the selection before the session and the receipt marker last.
     // This order distinguishes a lost wake from an already completed receive.
     const waiter = await readMemory(context, state, parent + 0x10, 0x18);
@@ -401,22 +400,22 @@ async function access(context, state, request) {
     if (session.readBigUInt64LE(0x28) !== BigInt(parent) || session.readUInt32LE(0x40) !== 1)
       return {injected: false, retry: true, parent: Number(session.readBigUInt64LE(0x28)),
         state: session.readUInt32LE(0x40)};
-    // The holder is a distinct 0x88-byte object in front of the session fields.
-    // RegisterServerSessionToWait sets +0x38 (user data) to 1 and clears the
-    // defer byte at +0x70. Require both before the unverified store; a wrong
-    // candidate would otherwise be dereferenced by ProcessAsSession.
-    const candidate = await readMemory(context, state, holder, 0x88);
-    const vptr = candidate.readBigUInt64LE();
-    const userData = candidate.readBigUInt64LE(0x38);
-    const defer = candidate[0x70];
-    const owner = candidate.readBigUInt64LE(0x28);
-    const handle = candidate.readUInt32LE(0x30);
-    const proof = {holder, vptr: vptr.toString(), userData: userData.toString(), defer,
-      handle, owner: owner.toString()};
+    // When the holder is the session row itself (the normal case), the session
+    // identity checks above are the proof. A separate holder object (delta != 0)
+    // must also report user data 1 and the session's real wait handle.
+    const holderBytes = holder === server ? session : await readMemory(context, state, holder, 0x88);
+    const vptr = holderBytes.readBigUInt64LE();
+    const userData = holderBytes.readBigUInt64LE(0x38);
+    const handle = holderBytes.readUInt32LE(0x30);
+    const owner = holderBytes.readBigUInt64LE(0x28);
+    const proof = {holder, vptr: vptr.toString(), userData: userData.toString(),
+      handle, owner: owner.toString(), sameAsSession: holder === server};
     check(vptr >= 2 ** 32 && vptr < 2 ** 39, 'Holder vtable is not a mapped pointer');
     check(userData === 1n, 'Holder user data is not a session');
-    check(defer === 0, 'Holder is marked deferred');
-    check(handle === Number(request.wait), 'Holder wait handle differs');
+    if (holder !== server) {
+      check(holderBytes[0x70] === 0, 'Holder is marked deferred');
+      check(handle === Number(request.wait), 'Holder wait handle differs');
+    }
     const header = (await readMemory(context, state, Number(request.buffer), 4)).readUInt32LE();
     // step() primes the header to 0xffffffff; stepServe() keeps the real queued
     // request, so only the primed path treats a non-empty header as consumed.
@@ -440,21 +439,24 @@ async function access(context, state, request) {
     return entry;
   }
   if (command === 'holder-probe') {
-    // Read-only: report the candidate holder in front of the session so a test
-    // can record it before an injection can freeze the console.
+    // Read-only: report the candidate holder so a test can record it before an
+    // injection can freeze the console. The normal holder is the session row.
     const server = Number(request.server);
-    const holder = Number(request.holder ?? server - 0x88);
+    const holder = Number(request.holder ?? server);
     const candidate = await readMemory(context, state, holder, 0x88);
     const session = await readMemory(context, state, server, 0x88);
-    return {server, holder,
+    return {server, holder, sameAsSession: holder === server,
       vptr: candidate.readBigUInt64LE(0).toString(),
       owner: candidate.readBigUInt64LE(0x28).toString(),
       handle: candidate.readUInt32LE(0x30),
       userData: candidate.readBigUInt64LE(0x38).toString(),
       defer: candidate[0x70],
+      domain: candidate.readBigUInt64LE(0x70).toString(),
+      metadata: candidate.readBigUInt64LE(0x78).toString(),
       sessionWait: session.readUInt32LE(0x30),
       sessionReceive: session.readUInt32LE(0x48),
       sessionState: session.readUInt32LE(0x40),
+      sessionParent: session.readBigUInt64LE(0x28).toString(),
       raw: candidate.toString('hex')};
   }
   check(['select', 'read', 'write'].includes(command), 'Unknown retained-memory command');
