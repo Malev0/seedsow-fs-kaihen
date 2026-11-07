@@ -234,30 +234,42 @@ async function dispatch(context, request, state, domain) {
     await save();
     return entry;
   }
-  // Open a throwaway file on the converted donor filesystem and duplicate its
-  // reference. The launch adopts this object into the freed NPDM slot so the
-  // Loader's close has a live, normally-closable target (see launch.cjs).
+  // Open a throwaway file and duplicate its reference. The launch adopts this
+  // object into the freed NPDM slot so the Loader's close has a live,
+  // normally-closable target (see launch.cjs). Prefer the retained CodeFS: its
+  // file objects are the same class the app already opens/closes successfully
+  // during firmware capture, and closing one cannot disturb the donor swap.
   if (command === 'file-spare') {
     const name = request.name || 'main.npdm';
-    const donor = state.donor;
-    check(donor?.ready && donor.root > 0 && s.handles.has(donor.handle),
-      'Spare file requires the converted donor filesystem');
+    const source = request.source || 'code';
+    let handle, root;
+    if (source === 'code') {
+      const code = state.codeFileSystems?.[0];
+      check(code?.domainRoot > 0 && s.handles.has(code.handle),
+        'Spare file requires the retained CodeFS domain');
+      handle = code.handle; root = code.domainRoot;
+    } else {
+      const donor = state.donor;
+      check(donor?.ready && donor.root > 0 && s.handles.has(donor.handle),
+        'Spare file requires the converted donor filesystem');
+      handle = donor.handle; root = donor.root;
+    }
     const {domainPathPacket} = require('../app/filesystem.cjs');
     const filename = Buffer.alloc(0x301); filename.write('/' + name);
     await s.write(s.base + 0x2000, filename);
     const mode = Buffer.alloc(4); mode.writeUInt32LE(1);
-    const opened = await domain.send(s, 'RO spare: open /' + name, donor.handle,
-      domainPathPacket(donor.root, 8, mode, s.base + 0x2000), {domain: true});
+    const opened = await domain.send(s, 'RO spare: open ' + source + ' /' + name, handle,
+      domainPathPacket(root, 8, mode, s.base + 0x2000), {domain: true});
     check(!opened.result && opened.objects.length === 1,
-      'Spare file did not open in the donor domain: ' + opened.canonicalResult);
+      'Spare file did not open in the ' + source + ' domain: ' + opened.canonicalResult);
     const id = opened.objects[0];
     check(Number.isInteger(id) && id > 0 && id <= 0x4000, 'Spare object ID exceeds the domain capacity');
     const input = Buffer.alloc(4); input.writeUInt32LE(id);
-    const copied = await domain.send(s, 'RO spare: CopyObject', donor.handle,
+    const copied = await domain.send(s, 'RO spare: CopyObject', handle,
       domain.wire.control(1, input));
     check(!copied.result, 'Spare object copy failed: ' + copied.canonicalResult);
-    const handle = domain.oneHandle(copied);
-    const entry = {at: new Date().toISOString(), name, id, handle};
+    const copy = domain.oneHandle(copied);
+    const entry = {at: new Date().toISOString(), name, source, id, handle: copy};
     (state.spareObjects ||= []).push(entry); await save();
     return entry;
   }
