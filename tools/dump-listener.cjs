@@ -16,13 +16,19 @@ const path = require('node:path');
 const port = Number(process.env.NS2_DUMP_PORT || 39401);
 const dir = path.join(__dirname, '..');
 
+// The console app can abort right after sending the dump, before it closes the
+// socket. Save on EOF, but also save once the transfer goes quiet: a complete
+// 16 KiB window arrives in one burst, so a short idle gap means it is done.
+const IDLE_MS = Number(process.env.NS2_DUMP_IDLE_MS || 2000);
+
 const server = net.createServer(socket => {
   const from = socket.remoteAddress;
   const chunks = [];
-  console.log(JSON.stringify({at: new Date().toISOString(), connected: from,
-    remotePort: socket.remotePort}));
-  socket.on('data', chunk => chunks.push(chunk));
-  socket.on('end', () => {
+  let saved = false, idle = null;
+  const save = () => {
+    if (saved) return;
+    saved = true;
+    if (idle) {clearTimeout(idle); idle = null;}
     const bytes = Buffer.concat(chunks);
     // The GUI preflights the listener with a bare connect; do not save that.
     if (!bytes.length) return;
@@ -31,9 +37,20 @@ const server = net.createServer(socket => {
     fs.writeFileSync(out, bytes);
     console.log(JSON.stringify({at: new Date().toISOString(), from,
       bytes: bytes.length, file: out}));
+  };
+  console.log(JSON.stringify({at: new Date().toISOString(), connected: from,
+    remotePort: socket.remotePort}));
+  socket.on('data', chunk => {
+    chunks.push(chunk);
+    if (idle) clearTimeout(idle);
+    idle = setTimeout(save, IDLE_MS);
   });
-  socket.on('close', () => console.log(JSON.stringify({at: new Date().toISOString(),
-    closed: from, bytes: Buffer.concat(chunks).length})));
+  socket.on('end', save);
+  socket.on('close', () => {
+    save();
+    console.log(JSON.stringify({at: new Date().toISOString(),
+      closed: from, bytes: Buffer.concat(chunks).length}));
+  });
   socket.on('error', error => console.error('dump socket:', error.message));
 });
 

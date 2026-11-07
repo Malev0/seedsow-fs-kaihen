@@ -359,7 +359,10 @@ async function dispatch(context, request, state, domain) {
         args: [{result: socketIndex}, area + 0x1800, 16, 0]});                // connect
       calls.push({function: live.sdk + SOCK.send,
         args: [{result: socketIndex}, area + 0x10000, Number(request.length), 0]}); // send
-      calls.push({function: live.sdk + SOCK.close, args: [{result: socketIndex}, 0, 0, 0]}); // close
+      // Do not close here. The tcp-test run showed the app aborts right after a
+      // successful worker-thread socket send+close; the listener saves on EOF
+      // or after a short idle gap, so leaving the fd open costs nothing and may
+      // keep the app alive for the post-load inspection.
     }
     const worker = await native.start(s, area + 0x20000, 0x40000, slot, calls,
       'ro-' + request.kind + '-' + Date.now(), 0,
