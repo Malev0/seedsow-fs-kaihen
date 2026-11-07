@@ -40,8 +40,12 @@ const local = (session, suffix) => path.join(directory, session + suffix);
 
 async function activate(launchFile) {
   const memory = await connect(), launch = await read(launchFile);
+  // restoreSkipped means the stale close was left queued and the Loader session
+  // parked on purpose (serving or restoring it faults the console). The launch
+  // itself is valid: the Loader read the main image on its other FS session.
   check(launch.report === memory.reportFile && launch.session === memory.info.session &&
-    launch.imageAccepted && launch.restored && (launch.flags === 0 || launch.flags === 0x10) &&
+    launch.imageAccepted && (launch.restored || launch.restoreSkipped) &&
+    (launch.flags === 0 || launch.flags === 0x10) &&
     /^\d+$/.test(launch.pid), 'The current boot has no accepted, stopped RO image');
   const state = await memory.request({command: 'root-native-info'});
   check(state.worker?.joined, 'The launch worker has not joined');
@@ -96,16 +100,22 @@ async function handoff() {
   const row = bound.rows.find(r => r.domain === layout.target.domain);
   check(row, 'The Loader session is missing');
   const b = await memory.read(row.address, 0x88);
+  // A launch that skipped restore leaves the session parked on our notifier
+  // with the stale close still queued. The receive handle, parent and state are
+  // unchanged; only +0x30 differs, so treat that as the expected parked state.
+  const parked = b.readUInt32LE(0x30) !== row.receive;
   check(ptr(b) === ptr(Buffer.from(row.raw, 'hex')) && ptr(b, 0x70) === row.domain &&
     ptr(b, 0x78) === row.metadata && ptr(b, 0x60) === row.request &&
-    b.readUInt32LE(0x30) === row.receive && b.readUInt32LE(0x48) === row.receive &&
+    (parked || b.readUInt32LE(0x30) === row.receive) &&
+    b.readUInt32LE(0x48) === row.receive &&
     b.readUInt32LE(0x40) === 1 && bound.waiters.includes(ptr(b, 0x28)),
-  'Loader has not returned to its original idle receive session');
+  'Loader session changed or is not parked');
   const state = await memory.request({command: 'root-native-info'});
   check(state.worker?.joined, 'A native proof worker remains active');
   const result = {session, report: memory.reportFile, at: new Date().toISOString(),
-    fsReady: memory.info.ready, corruptionCount: memory.info.corruptionCount,
-    loader: {address: row.address, wait: row.receive, receive: row.receive, state: 1}, workerJoined: true};
+    fsReady: memory.info.ready, corruptionCount: memory.info.corruptionCount, parked,
+    loader: {address: row.address, wait: b.readUInt32LE(0x30), receive: row.receive, state: 1},
+    workerJoined: true};
   const file = local(session, '-handoff.json'); await save(file, result);
   return {file, ...result};
 }

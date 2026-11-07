@@ -111,7 +111,12 @@ async function main() {
         watch: launch.watch, waitOnly: launch.waitOnly}));
       return;
     }
-    check(launch.imageAccepted && launch.restored && launch.pid, 'PM did not accept the payload');
+    // A stale close (the read frees its own domain entry) is left queued and
+    // the session parked instead of being served, because serving it faults the
+    // console. The Loader's main-image read runs on its other FS session, so the
+    // launch is still valid: 03:16 returned result 0 and pid 208 this way.
+    check(launch.imageAccepted && launch.pid && (launch.restored || launch.restoreSkipped),
+      'PM did not accept the payload');
     const activation = await stage('Start RO payload', () => runtime.activate(launch.file));
     const proof = await stage('RO instruction challenges', () => runtime.probe(activation.pid));
     const handoff = await stage('Restore Loader session', () => runtime.handoff());

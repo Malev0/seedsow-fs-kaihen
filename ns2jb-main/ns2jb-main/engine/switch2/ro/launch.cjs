@@ -720,37 +720,14 @@ async function main() {
     }
     // The 03:16 captures settle the read: the save-filesystem IFile Read frees
     // its own domain entry (slot 142 came back self-linked, +0x18/+0x20 zero,
-    // and the sentinel skipped it), and the Loader still sends close(142) and
-    // blocks on the reply. Serving that close dereferences a freed object and
-    // faults (02:20), and fabricating an entry from the loader root also killed
-    // the FS (03:58) because a root-session close tears down the session. The
-    // Loader only checks the reply's result, so answer the blocked close with a
-    // read-only GetEntryType on the donor filesystem: the FS replies result 0,
-    // the Loader's close returns success, and nothing is allocated or freed.
-    // The path lives in the Loader's own 0x100-byte message buffer.
-    async function substituteClose(id) {
-      const objectId = Number(proof.exchange?.code?.id);
-      if (!Number.isInteger(objectId) || objectId <= 0) return null;
-      const base = Number(row.request), pathAddr = base + 0x80;
-      const packet = Buffer.alloc(0x100);
-      packet.writeUInt32LE(0x00010006, 0);        // type 6, one send descriptor
-      packet.writeUInt32LE(12, 4);                 // 48-byte message
-      const a = BigInt(pathAddr);
-      packet.writeUInt32LE(Number((0x80n << 16n) | ((a >> 36n) & 7n) << 6n |
-        ((a >> 32n) & 15n) << 12n) >>> 0, 8);
-      packet.writeUInt32LE(Number(a & 0xffffffffn), 12);
-      packet[16] = 1;                              // domain request marker
-      packet.writeUInt16LE(16, 18);
-      packet.writeUInt32LE(objectId, 20);          // donor filesystem entry
-      packet.writeUInt32LE(0, 28);
-      packet.write('SFCI', 32);
-      packet.writeUInt32LE(1, 36);
-      packet.writeUInt32LE(7, 40);                 // GetEntryType
-      packet.write('/main.npdm\0', 0x80, 'utf8');
-      const current = await memory.read(base, 0x100);
-      await memory.write(base, current, packet);
-      return {id, object: objectId, command: 7, path: '/main.npdm', pathAddr};
-    }
+    // and the sentinel skipped it), and the Loader still sends close(142).
+    // Serving that close dereferences a freed object and faults (02:20); the
+    // root-borrow close killed the FS (03:58). Rewriting row.request does not
+    // help either: the dispatcher copies the kernel IPC request into +0x60 at
+    // serve time (fs.elf +0x21b780), so the real close is what gets processed.
+    // The Loader reads the main image on its other FS session, so the correct
+    // move is to leave the close queued and the session parked (03:16 still
+    // returned result 0 and pid 208). Do not serve or restore it.
     const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
     const quietMs = Number(process.env.NS2_LAUNCH_QUIET_MS || 15000);
@@ -821,21 +798,18 @@ async function main() {
             if (Date.now() - lastServedAt >= quietMs) break;
             continue;
           }
+          // The read frees its own domain entry. Serving the close would make
+          // the FS dereference the freed object and fault the console. The FS
+          // reads the request from the kernel IPC buffer at serve time, so
+          // rewriting row.request cannot substitute it. Leave the close queued
+          // and the session parked: the Loader's main-image read runs on its
+          // other FS session (03:16 still returned result 0 and pid 208).
           const current = await entries(memory, layout, root.targetDomain);
           if (!current.some(entry => entry.id === pendingInfo.object)) {
-            const substituted = await substituteClose(pendingInfo.object).catch(error => {
-              (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
-              return null;
-            });
-            if (substituted) {
-              (proof.substitutedCloses ||= []).push({index: i, ...substituted});
-              console.log(JSON.stringify({stage: 'close-substituted', index: i, ...substituted}));
-              await save();
-            } else {
-              (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object});
-              if (Date.now() - lastServedAt >= quietMs) break;
-              continue;
-            }
+            (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object,
+              reason: 'close target is no longer in the target domain'});
+            if (Date.now() - lastServedAt >= quietMs) break;
+            continue;
           }
         }
         if (pendingInfo)
@@ -941,10 +915,21 @@ async function main() {
       // slot 2 is the deferred pm:dmnt start whose result is the launch result.
       proof.settled = {};
       for (const slot of [1, 2]) {
-        try { proof.settled[slot] = await memory.request({command: 'root-native-worker-settle', slot}); }
-        catch (error) { (proof.settleErrors ||= {})[slot] = error.message; }
+        // Slot 1 carries the pid and can still be storing its result when the
+        // loop breaks on slot 2, so give it a few seconds before giving up.
+        const until = Date.now() + (slot === 1 ? 10000 : 0);
+        for (;;) {
+          try { proof.settled[slot] = await memory.request({command: 'root-native-worker-settle', slot}); break; }
+          catch (error) {
+            (proof.settleErrors ||= {})[slot] = error.message;
+            if (Date.now() >= until) break;
+            await new Promise(resolve => setTimeout(resolve, 250));
+          }
+        }
       }
-      proof.completion = proof.settled[2] || proof.settled[1];
+      // Slot 1 is the pm-launch reply that carries the new pid; slot 2 is the
+      // deferred pm:dmnt start result. Prefer slot 1 so the pid is recorded.
+      proof.completion = proof.settled[1] || proof.settled[2];
     } else {
       const until = Date.now() + 20000;
       while (!(await memory.request({command: 'root-native-worker-state'})).finished) {
