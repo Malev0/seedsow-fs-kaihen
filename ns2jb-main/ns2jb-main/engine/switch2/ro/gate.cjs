@@ -119,14 +119,18 @@ class Gate {
   // Wake-only step (NS2_GATE_STEP_MODE=wake): no fake `selected` pointer. It
   // captures a queued request, optionally wipes the header (NS2_GATE_PRIME=1),
   // signals our notifier once and reports what the session did.
-  async stepWake({empty = false} = {}) {
+  async stepWake({empty = false, force = false} = {}) {
     check(this.parked && !this.outstanding, 'Gate is not parked or an earlier step is unresolved');
     const unpark = process.env.NS2_GATE_UNPARK === '1';
     // The session is still parked here; the real handle is written below.
     const before = await this.inspect();
     check(before.state === 1 && this.waiters.includes(before.parent), 'Session is not idle on a known waiter');
-    check(await this.pending() === !empty, empty ? 'An idle session was expected' : 'A queued request is required');
+    // force skips pending(): the readiness check has hung the console while the
+    // session is parked. Read the queued header directly instead.
+    if (!force) check(await this.pending() === !empty, empty ? 'An idle session was expected' : 'A queued request is required');
     const header = await this.memory.u32(this.row.request);
+    if (force && !empty && header === 0xffffffff)
+      return {empty: true, forced: true, header: 'ffffffff', started: new Date().toISOString()};
     const step = this.outstanding = {empty, mode: 'wake', attempts: [], started: new Date().toISOString()};
     this.steps.push(step);
     if (!empty) {

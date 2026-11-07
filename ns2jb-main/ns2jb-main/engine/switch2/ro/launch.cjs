@@ -707,15 +707,26 @@ async function main() {
     const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
     for (let i = 0; i < 160; i++) {
-      while (!await gate.pending()) {
-        const worker = await memory.request({command: 'root-native-worker-state', slot: launchSlot});
-        if (worker.finished) break;
-        check(Date.now() < deadline, 'PM launch did not reach the parked FS session');
-        await new Promise(resolve => setTimeout(resolve, 25));
+      if (flags === 0x10) {
+        // wait-zero on the readiness handle hangs while the session is parked.
+        // Wait host-side and read the queued header directly in stepWake.
+        await new Promise(resolve => setTimeout(resolve, Number(process.env.NS2_LAUNCH_GATE_MS || 500)));
+        const peek = await memory.request({command: 'root-native-worker-peek', slot: 2});
+        if (peek.values.every(value => value !== peek.sentinel)) break;
+      } else {
+        while (!await gate.pending()) {
+          const worker = await memory.request({command: 'root-native-worker-state'});
+          if (worker.finished) break;
+          check(Date.now() < deadline, 'PM launch did not reach the parked FS session');
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        if ((await memory.request({command: 'root-native-worker-state'})).finished) break;
       }
-      if ((await memory.request({command: 'root-native-worker-state', slot: launchSlot})).finished) break;
+      check(Date.now() < deadline, 'PM launch did not reach the parked FS session');
       const before = await entries(memory, layout, root.targetDomain);
-      const step = await gate.stepWake(), info = requestInfo(step.request);
+      const step = await gate.stepWake({force: flags === 0x10});
+      if (step.empty) continue;
+      const info = requestInfo(step.request);
       const after = await entries(memory, layout, root.targetDomain);
       const added = after.filter(a => !before.some(b => b.id === a.id && b.object === a.object));
       const record = {index: i, ...info, added, removed: before.filter(b => !after.some(a => a.id === b.id && a.object === b.object))};
