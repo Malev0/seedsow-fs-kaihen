@@ -718,6 +718,35 @@ async function main() {
       await gate.parkSession(); proof.parked = true; await save();
       await memory.request({command: 'root-native-worker-release'});
     }
+    // The CodeFS IStorage Read unlinks its domain entry from the target
+    // domain's list (the 02:53 run: sentinel.next went 142 -> 139) but leaves
+    // the slot's object/domain/metadata. The Loader still sends close(142) and
+    // waits for the reply, so re-link the slot at the head of the list before
+    // serving that close. Only do it when the object vtable still looks mapped;
+    // otherwise the object was freed and re-linking would fault.
+    async function recoverEntry(id) {
+      const table = Number(layout.table), count = Number(layout.count);
+      if (!Number.isInteger(id) || id <= 0 || id > count) return null;
+      const slot = table + (id - 1) * 0x30;
+      const b = await memory.read(slot, 0x30);
+      const object = Number(b.readBigUInt64LE(0x20));
+      if (!Number.isSafeInteger(object) || object < 2 ** 32 || object >= 2 ** 39) return null;
+      const vptr = await memory.pointer(object);
+      if (vptr < 2 ** 32 || vptr >= 2 ** 39) return null;
+      const sentinel = Number(root.targetDomain) + 0x20;
+      const sNext = await memory.pointer(sentinel);
+      const updated = Buffer.from(b);
+      updated.writeBigUInt64LE(BigInt(sNext), 0x00);
+      updated.writeBigUInt64LE(BigInt(sentinel), 0x08);
+      updated.writeBigUInt64LE(BigInt(root.targetDomain), 0x18);
+      await memory.write(slot, b, updated);
+      if (sNext !== sentinel) {
+        const prev = (await memory.read(sNext + 0x08, 8)).readBigUInt64LE();
+        await memory.writeU64(sNext + 0x08, Number(prev), slot);
+      }
+      await memory.writeU64(sentinel, sNext, slot);
+      return {id, slot, object, vptr, sNext};
+    }
     const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
     const quietMs = Number(process.env.NS2_LAUNCH_QUIET_MS || 15000);
@@ -772,9 +801,18 @@ async function main() {
         if (pendingInfo?.kind === 'close') {
           const current = await entries(memory, layout, root.targetDomain);
           if (!current.some(entry => entry.id === pendingInfo.object)) {
-            (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object});
-            if (Date.now() - lastServedAt >= quietMs) break;
-            continue;
+            const recovered = await recoverEntry(pendingInfo.object).catch(error => {
+              (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
+              return null;
+            });
+            if (recovered) {
+              (proof.recoveredCloses ||= []).push({index: i, ...recovered});
+              await save();
+            } else {
+              (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object});
+              if (Date.now() - lastServedAt >= quietMs) break;
+              continue;
+            }
           }
         }
         if (lastBuffer && pending === lastBuffer) {
@@ -861,7 +899,14 @@ async function main() {
     if (stopLiveness) await stopLiveness();
     // A wedged endpoint or a dead console makes restore throw; record it
     // instead of masking the error that ended the stage.
-    try {
+    if (proof.staleCloses?.length && !proof.recoveredCloses?.length) {
+      // The Loader is blocked on a close whose domain entry we could not
+      // restore. Signalling the parked session would make the FS process that
+      // close and fault the console (the 02:53 restore), so leave it parked and
+      // keep the console alive for inspection.
+      proof.restoreSkipped = 'stale close left queued; session kept parked';
+      await save();
+    } else try {
       await gate.restore();
       proof.restored = true; proof.restoration = gate.restoration;
     } catch (error) {
