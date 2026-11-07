@@ -751,41 +751,51 @@ async function main() {
           input.readBigUInt64LE(8) === BigInt(proof.target), 'The queued CodeFS mount is not the selected native target');
         proof.mounts++;
         record.targetMount = proof.mounts;
-        // The entry metadata is not a stable identity: the first mount returns
-        // donor.metadata + 8 (a different interface adapter). The concrete
-        // object vptr is the real check. Swap the first mount whose adapter
-        // matches the donor, regardless of which mount number it is.
-        if (added.length === 1) {
-          const adapterVptr = await memory.pointer(added[0].object);
-          record.adapter = {metadata: added[0].metadata, vptr: adapterVptr};
-          if (adapterVptr === donor.vptr) {
-            const code = added[0], currentDonor = await memory.read(donor.entry, 0x30);
-            check(currentDonor.subarray(0x18).equals(Buffer.from(donor.raw, 'hex').subarray(0x18)) &&
-              await memory.pointer(donor.object) === donor.vptr,
-            'Filesystem identity or concrete adapter type changed');
-            proof.exchange = {code, donor, started: new Date().toISOString(), firstWritten: false, secondWritten: false};
-            await save();
-            await memory.writeU64(code.entry + 0x20, code.object, donor.object);
-            proof.exchange.firstWritten = true; await save();
-            try {
-              await memory.writeU64(donor.entry + 0x20, donor.object, code.object);
-              proof.exchange.secondWritten = true; await save();
-            } catch (error) {
-              check(await memory.pointer(donor.entry + 0x20) === donor.object, 'Donor write failed without restoration');
-              await memory.writeU64(code.entry + 0x20, donor.object, code.object);
-              proof.exchange.rolledBack = true; await save();
-              throw error;
-            }
-            check(await memory.pointer(code.entry + 0x18) === root.targetDomain &&
-              await memory.pointer(code.entry + 0x20) === donor.object &&
-              await memory.pointer(donor.entry + 0x18) === donor.domain &&
-              await memory.pointer(donor.entry + 0x20) === code.object, 'Owning-reference exchange did not verify');
-            proof.swapped = true; await save();
-            console.log(JSON.stringify({stage: 'filesystem-exchanged', file, mount: proof.mounts, object: code.id}));
-            break;
+      }
+      // Swap the first added entry whose concrete adapter matches the donor.
+      // This is not limited to command 0: in the 01:17 run the command-2 entry
+      // carried the donor metadata (and was used by the Loader's next request),
+      // while the command-0 mount returned a different class (vptr + 0x260).
+      // Read the object vptr, not the entry metadata, and swap before the next
+      // request is served.
+      if (!proof.swapped) {
+        for (const entry of added) {
+          const adapterVptr = await memory.pointer(entry.object);
+          (record.adapters ||= []).push({id: entry.id, metadata: entry.metadata, vptr: adapterVptr});
+          // The concrete class may differ (CodeFS vs SaveData) while the
+          // interface vtable (entry metadata) is the same. The donor is a clone
+          // of the save filesystem with the same interface and file layout, so
+          // a metadata match is enough to make the swap; the vptr match is the
+          // stricter case.
+          if (adapterVptr !== donor.vptr && entry.metadata !== donor.metadata) continue;
+          const currentDonor = await memory.read(donor.entry, 0x30);
+          check(currentDonor.subarray(0x18).equals(Buffer.from(donor.raw, 'hex').subarray(0x18)) &&
+            await memory.pointer(donor.object) === donor.vptr,
+          'Filesystem identity or concrete adapter type changed');
+          const code = entry;
+          proof.exchange = {code, donor, started: new Date().toISOString(), firstWritten: false, secondWritten: false};
+          await save();
+          await memory.writeU64(code.entry + 0x20, code.object, donor.object);
+          proof.exchange.firstWritten = true; await save();
+          try {
+            await memory.writeU64(donor.entry + 0x20, donor.object, code.object);
+            proof.exchange.secondWritten = true; await save();
+          } catch (error) {
+            check(await memory.pointer(donor.entry + 0x20) === donor.object, 'Donor write failed without restoration');
+            await memory.writeU64(code.entry + 0x20, donor.object, code.object);
+            proof.exchange.rolledBack = true; await save();
+            throw error;
           }
+          check(await memory.pointer(code.entry + 0x18) === root.targetDomain &&
+            await memory.pointer(code.entry + 0x20) === donor.object &&
+            await memory.pointer(donor.entry + 0x18) === donor.domain &&
+            await memory.pointer(donor.entry + 0x20) === code.object, 'Owning-reference exchange did not verify');
+          proof.swapped = true; await save();
+          console.log(JSON.stringify({stage: 'filesystem-exchanged', file, mount: proof.mounts, object: code.id}));
+          break;
         }
       }
+      if (proof.swapped) break;
       await save();
       console.log(JSON.stringify({stage: 'stepped', index: i, kind: info.kind, object: info.object,
         command: info.command, added: added.map(a => a.id), mounts: proof.mounts}));
