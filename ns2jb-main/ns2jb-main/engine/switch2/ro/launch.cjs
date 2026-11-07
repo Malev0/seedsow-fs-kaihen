@@ -826,6 +826,92 @@ async function main() {
       return {id, slot, object: removed.object, metadata: removed.metadata, vptr, header, sNext};
     }
 
+    // The consumed NPDM file cannot be restored: its Read frees the entry and
+    // the close path faults on the dead object (11:10..14:37). Open a fresh file
+    // on the donor filesystem instead, take its domain entry away from the donor
+    // domain *without releasing the object*, and give that entry's reference to
+    // the freed NPDM slot in the Loader's target domain. The Loader's close then
+    // removes a valid target-domain entry whose object is a live file, so the
+    // close never touches the consumed object or the donor filesystem.
+    async function adoptSpareEntry(id) {
+      const table = Number(layout.table), count = Number(layout.count), manager = Number(layout.manager);
+      if (!Number.isSafeInteger(table) || !Number.isInteger(count) ||
+          !Number.isSafeInteger(manager)) return null;
+      const target = table + (id - 1) * 0x30;
+      if (!(target >= table && target < table + count * 0x30 && (target - table) % 0x30 === 0)) return null;
+      const targetBefore = await memory.read(target, 0x30);
+      const targetDomain = ptr(targetBefore, 0x18), targetObject = ptr(targetBefore, 0x20);
+      const freed = targetDomain === 0 && targetObject === 0;
+      if (!freed) {
+        // The slot is still linked but its object is dead (the Read freed the
+        // object without unlinking the entry). Remove it from the target domain
+        // list before replacing it; the dead reference is not released.
+        if (targetDomain !== Number(root.targetDomain)) return null;
+        const tNext = ptr(targetBefore, 0x00), tPrev = ptr(targetBefore, 0x08);
+        if (tNext === target || tPrev === target) return null;
+        if (await memory.pointer(tPrev) !== target ||
+            await memory.pointer(tNext + 0x08) !== target) return null;
+        await memory.writeU64(tPrev, target, tNext);
+        await memory.writeU64(tNext + 0x08, target, tPrev);
+      }
+      const spare = await memory.request({command: 'root-native-file-spare', name: 'main.npdm'});
+      const spareSlot = table + (spare.id - 1) * 0x30;
+      const sb = await memory.read(spareSlot, 0x30);
+      const object = ptr(sb, 0x20), metadata = ptr(sb, 0x28), spareDomain = ptr(sb, 0x18);
+      if (!(spareDomain >= 2 ** 32 && spareDomain < 2 ** 39) ||
+          !(object >= 2 ** 32 && object < 2 ** 39) ||
+          !(metadata >= 2 ** 32 && metadata < 2 ** 39)) return null;
+      const vptr = await memory.pointer(object);
+      if (!(vptr >= 2 ** 32 && vptr < 2 ** 39)) return null;
+      const next = ptr(sb, 0x00), prev = ptr(sb, 0x08);
+      if (next === spareSlot || prev === spareSlot) return null;
+      // Unlink the spare entry from the donor domain list. The object keeps the
+      // entry's reference; we deliberately do not release it, so the target
+      // entry can take that reference over.
+      if (await memory.pointer(prev) !== spareSlot ||
+          await memory.pointer(next + 0x08) !== spareSlot) return null;
+      await memory.writeU64(prev, spareSlot, next);
+      await memory.writeU64(next + 0x08, spareSlot, prev);
+      if (spareSlot !== target) {
+        // Return the now-unreferenced donor slot to the manager free list. Its
+        // object reference is transferred to the target entry, not released.
+        const head = await memory.pointer(manager + 0x28);
+        const free = Buffer.alloc(0x30);
+        free.writeBigUInt64LE(BigInt(spareSlot), 0x00);
+        free.writeBigUInt64LE(BigInt(spareSlot), 0x08);
+        free.writeBigUInt64LE(BigInt(head), 0x10);
+        free.writeBigUInt64LE(0n, 0x18);
+        free.writeBigUInt64LE(0n, 0x20);
+        free.writeBigUInt64LE(0n, 0x28);
+        await memory.write(spareSlot, sb, free);
+        await memory.writeU64(manager + 0x28, head, spareSlot);
+        if (freed && !await unlinkFree(target).catch(() => false)) return null;
+      }
+      // Link the entry into the target domain and point it at the spare object.
+      const sentinel = Number(root.targetDomain) + 0x20;
+      const sNext = await memory.pointer(sentinel);
+      const base = spareSlot === target ? sb : targetBefore;
+      const updated = Buffer.from(base);
+      updated.writeBigUInt64LE(BigInt(sNext), 0x00);
+      updated.writeBigUInt64LE(BigInt(sentinel), 0x08);
+      updated.writeBigUInt64LE(0n, 0x10);
+      updated.writeBigUInt64LE(BigInt(root.targetDomain), 0x18);
+      updated.writeBigUInt64LE(BigInt(object), 0x20);
+      updated.writeBigUInt64LE(BigInt(metadata), 0x28);
+      await memory.write(target, base, updated);
+      if (sNext !== sentinel) {
+        const p = await memory.pointer(sNext + 0x08);
+        await memory.writeU64(sNext + 0x08, p, target);
+      }
+      await memory.writeU64(sentinel, sNext, target);
+      const readback = await memory.read(target, 0x30);
+      if (ptr(readback, 0x18) !== Number(root.targetDomain) || ptr(readback, 0x20) !== object)
+        return null;
+      const header = await memory.read(object, 0x80).then(b => b.toString('hex')).catch(() => null);
+      return {id, slot: target, object, metadata, vptr, header, spare: spare.id,
+        copy: spare.handle, donorDomain: spareDomain, sNext};
+    }
+
     // The file Read removes its own domain entry and releases one reference.
     // If that was the last reference the file object is freed and the Loader's
     // close dereferences dead memory (11:10) or, when we substitute a different
@@ -939,13 +1025,21 @@ async function main() {
           }
           // The Read unlinked its own domain entry, so the close's id is no
           // longer live. Every attempt that restored the consumed file object
-          // faulted the FS (11:10, 11:38, 11:51, 13:52, 14:11), and hiding the
-          // id behind the manager count did not help (14:37: the FS ignored the
-          // count). The remaining untested target is the live donor filesystem
-          // itself: it is kept alive by donorReference, and its interface is
-          // IFileSystem, so the close never runs the consumed file destructor.
+          // faulted the FS (11:10, 11:38, 11:51, 13:52, 14:11), hiding the id
+          // behind the manager count did not help (14:37), and retargeting the
+          // restored slot at the donor filesystem faulted too (20:36). Give the
+          // close a valid target-domain entry instead: open a fresh file on the
+          // donor filesystem and adopt its object/reference into the freed slot
+          // (adoptSpareEntry). The donor filesystem itself is never the target.
           const current = await entries(memory, layout, root.targetDomain);
-          if (!current.some(entry => entry.id === pendingInfo.object)) {
+          const present = current.find(entry => entry.id === pendingInfo.object);
+          let live = !!present && present.object >= 2 ** 32 && present.object < 2 ** 39;
+          if (live) {
+            const vp = await memory.pointer(present.object).catch(() => 0);
+            live = vp >= 2 ** 32 && vp < 2 ** 39 &&
+              Math.abs(vp - Number(donor.vptr)) < 0x100000;
+          }
+          if (!live) {
             if (process.env.NS2_LAUNCH_CLOSE_HANDBACK === '1') {
               const recovered = await recoverRemovedEntry(pendingInfo.object).catch(error => {
                 (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
@@ -959,22 +1053,15 @@ async function main() {
                 break;
               }
             }
-            const recovered = await recoverRemovedEntry(pendingInfo.object).catch(error => {
-              (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
+            const adopted = await adoptSpareEntry(pendingInfo.object).catch(error => {
+              (proof.adoptErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
               return null;
             });
-            if (recovered) {
-              (proof.recoveredCloses ||= []).push({index: i, ...recovered});
-              console.log(JSON.stringify({stage: 'close-recovered', index: i, ...recovered}));
-              // Retarget the restored slot at the donor filesystem object.
-              const slot = recovered.slot;
-              const original = await memory.read(slot, 0x30);
-              const updated = Buffer.from(original);
-              updated.writeBigUInt64LE(BigInt(donor.object), 0x20);
-              updated.writeBigUInt64LE(BigInt(donor.metadata), 0x28);
-              await memory.write(slot, original, updated);
-              proof.closeTarget = {kind: 'donor', slot, object: donor.object,
-                metadata: donor.metadata, file: recovered.object};
+            if (adopted) {
+              (proof.adoptedCloses ||= []).push({index: i, ...adopted});
+              console.log(JSON.stringify({stage: 'close-adopted', index: i, ...adopted}));
+              proof.closeTarget = {kind: 'spare', slot: adopted.slot, object: adopted.object,
+                metadata: adopted.metadata, spare: adopted.spare, copy: adopted.copy};
               await save();
               try {
                 // Skip the post-serve buffer/inspect reads: once the close is
@@ -985,7 +1072,7 @@ async function main() {
                   empty: !!step.empty, request: step.request ? step.request.slice(0, 64) : null});
                 await save();
                 console.log(JSON.stringify({stage: 'close-served', index: i,
-                  id: pendingInfo.object, target: 'donor', empty: !!step.empty}));
+                  id: pendingInfo.object, target: 'spare', empty: !!step.empty}));
                 lastBuffer = step.bufferAfterWake || step.request;
                 lastServedAt = Date.now(); sameWaits = 0;
                 continue;
@@ -1000,7 +1087,7 @@ async function main() {
               }
             }
             (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object,
-              reason: 'close target is no longer in the target domain'});
+              reason: 'adopt-spare failed; close target is not in the target domain'});
             if (Date.now() - lastServedAt >= quietMs) break;
             continue;
           }
