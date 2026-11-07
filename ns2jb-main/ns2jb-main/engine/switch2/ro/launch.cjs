@@ -718,16 +718,82 @@ async function main() {
       await gate.parkSession(); proof.parked = true; await save();
       await memory.request({command: 'root-native-worker-release'});
     }
-    // The 03:16 captures settle the read: the save-filesystem IFile Read frees
-    // its own domain entry (slot 142 came back self-linked, +0x18/+0x20 zero,
-    // and the sentinel skipped it), and the Loader still sends close(142).
-    // Serving that close dereferences a freed object and faults (02:20); the
-    // root-borrow close killed the FS (03:58). Rewriting row.request does not
-    // help either: the dispatcher copies the kernel IPC request into +0x60 at
-    // serve time (fs.elf +0x21b780), so the real close is what gets processed.
-    // The Loader reads the main image on its other FS session, so the correct
-    // move is to leave the close queued and the session parked (03:16 still
-    // returned result 0 and pid 208). Do not serve or restore it.
+    // The 03:16 captures settle the read: the file Read unlinks its own domain
+    // entry (slot 142 came back self-linked, +0x18/+0x20 zero) but leaves
+    // +0x28 metadata intact. The IFile object itself is not closed by Read, and
+    // the served-request record still has the object pointer from before the
+    // free. Serving the bare freed slot dereferences object 0 and faults
+    // (02:20); the root-borrow close killed the FS (03:58). So restore the slot
+    // from the `removed` record and let the Loader's close release the file
+    // normally. This matters now: the deferred pm:dmnt start blocks until the
+    // Loader's NPDM thread finishes, so leaving the close queued parks the
+    // start forever (the 10:35 run timed out in Start RO payload).
+    async function unlinkFree(slot) {
+      const manager = Number(layout.manager), table = Number(layout.table), count = Number(layout.count);
+      if (!Number.isSafeInteger(manager) || manager < 2 ** 32 ||
+          !Number.isSafeInteger(table) || !Number.isInteger(count)) return false;
+      const inside = at => at >= table && at < table + count * 0x30 && (at - table) % 0x30 === 0;
+      const headAddr = manager + 0x28;
+      const head = await memory.pointer(headAddr);
+      if (head === slot) {
+        const b = await memory.read(slot, 0x30);
+        await memory.writeU64(headAddr, slot, ptr(b, 0x10));
+        return true;
+      }
+      let at = head;
+      for (let n = 0; n < count && at; n++) {
+        if (!inside(at)) return false;
+        const b = await memory.read(at, 0x30);
+        const next = ptr(b, 0x10);
+        if (next === slot) {
+          const s = await memory.read(slot, 0x30);
+          await memory.writeU64(at + 0x10, slot, ptr(s, 0x10));
+          return true;
+        }
+        at = next;
+      }
+      return false;
+    }
+
+    async function recoverRemovedEntry(id) {
+      let removed = null;
+      for (let i = proof.requests.length - 1; i >= 0 && !removed; i--)
+        removed = (proof.requests[i].removed || []).find(entry => entry.id === id) || null;
+      if (!removed?.object || !removed?.metadata || !removed?.entry) return null;
+      if (!(removed.metadata >= 2 ** 32 && removed.metadata < 2 ** 39)) return null;
+      const vptr = await memory.pointer(removed.object);
+      // The file object is an FS-module class: its vtable must sit near the
+      // donor's vtable, not merely anywhere in the 39-bit user range.
+      if (!(vptr >= 2 ** 32 && vptr < 2 ** 39) ||
+          Math.abs(vptr - Number(donor.vptr)) > 0x100000) return null;
+      const slot = removed.entry, table = Number(layout.table), count = Number(layout.count);
+      if (!(slot >= table && slot < table + count * 0x30 && (slot - table) % 0x30 === 0)) return null;
+      const b = await memory.read(slot, 0x30);
+      if (ptr(b, 0x18) !== 0 || ptr(b, 0x20) !== 0) return null;
+      // Removing the slot from the free list also proves the FS has not already
+      // handed it to another request; if it did, leave the close stale.
+      if (!await unlinkFree(slot).catch(() => false)) return null;
+      const sentinel = Number(root.targetDomain) + 0x20;
+      const sNext = await memory.pointer(sentinel);
+      const updated = Buffer.from(b);
+      updated.writeBigUInt64LE(BigInt(sNext), 0x00);
+      updated.writeBigUInt64LE(BigInt(sentinel), 0x08);
+      updated.writeBigUInt64LE(0n, 0x10);
+      updated.writeBigUInt64LE(BigInt(root.targetDomain), 0x18);
+      updated.writeBigUInt64LE(BigInt(removed.object), 0x20);
+      updated.writeBigUInt64LE(BigInt(removed.metadata), 0x28);
+      await memory.write(slot, b, updated);
+      if (sNext !== sentinel) {
+        const prev = (await memory.read(sNext + 0x08, 8)).readBigUInt64LE();
+        await memory.writeU64(sNext + 0x08, Number(prev), slot);
+      }
+      await memory.writeU64(sentinel, sNext, slot);
+      const readback = await memory.read(slot, 0x30);
+      if (ptr(readback, 0x18) !== Number(root.targetDomain) || ptr(readback, 0x20) !== removed.object)
+        return null;
+      return {id, slot, object: removed.object, metadata: removed.metadata, vptr, sNext};
+    }
+
     const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
     const quietMs = Number(process.env.NS2_LAUNCH_QUIET_MS || 15000);
@@ -798,18 +864,27 @@ async function main() {
             if (Date.now() - lastServedAt >= quietMs) break;
             continue;
           }
-          // The read frees its own domain entry. Serving the close would make
-          // the FS dereference the freed object and fault the console. The FS
-          // reads the request from the kernel IPC buffer at serve time, so
-          // rewriting row.request cannot substitute it. Leave the close queued
-          // and the session parked: the Loader's main-image read runs on its
-          // other FS session (03:16 still returned result 0 and pid 208).
+          // The read unlinks its own domain entry and zeroes +0x18/+0x20, but
+          // the file object is still alive and the served-request record has
+          // its pointer. Restore the slot from that record and serve the close
+          // so the Loader's NPDM thread finishes and the deferred pm:dmnt start
+          // can return. If the object no longer looks mapped, leave it stale.
           const current = await entries(memory, layout, root.targetDomain);
           if (!current.some(entry => entry.id === pendingInfo.object)) {
-            (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object,
-              reason: 'close target is no longer in the target domain'});
-            if (Date.now() - lastServedAt >= quietMs) break;
-            continue;
+            const recovered = await recoverRemovedEntry(pendingInfo.object).catch(error => {
+              (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
+              return null;
+            });
+            if (recovered) {
+              (proof.recoveredCloses ||= []).push({index: i, ...recovered});
+              console.log(JSON.stringify({stage: 'close-recovered', index: i, ...recovered}));
+              await save();
+            } else {
+              (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object,
+                reason: 'close target is no longer in the target domain'});
+              if (Date.now() - lastServedAt >= quietMs) break;
+              continue;
+            }
           }
         }
         if (pendingInfo)
@@ -901,8 +976,25 @@ async function main() {
       proof.restoreSkipped = 'stale close left queued; session kept parked';
       await save();
     } else try {
-      await gate.restore();
-      proof.restored = true; proof.restoration = gate.restoration;
+      // Restoring into a queued close whose entry is gone makes the FS process
+      // that close and fault (02:53). The loop normally serves or records it;
+      // this last check covers a close queued after the final serve.
+      let queued = null;
+      try {
+        const info = requestInfo((await memory.read(row.request, 0x100)).toString('hex'));
+        if (info.kind === 'close') {
+          const current = await entries(memory, layout, root.targetDomain);
+          if (!current.some(entry => entry.id === info.object)) queued = info;
+        }
+      } catch (error) { proof.restoreProbeError = error.message; }
+      if (queued) {
+        (proof.staleCloses ||= []).push({object: queued.object, reason: 'queued at restore'});
+        proof.restoreSkipped = 'stale close left queued at restore; session kept parked';
+        await save();
+      } else {
+        await gate.restore();
+        proof.restored = true; proof.restoration = gate.restoration;
+      }
     } catch (error) {
       proof.restoreError = error.stack;
     }
