@@ -1061,18 +1061,6 @@ async function main() {
       // subsequent requests are served by the donor object. Breaking here (the
       // 01:45 run) left OpenFile queued forever and the launched process
       // faulted. Keep serving until the deferred pm:dmnt start returns.
-      if (flags === 0x10 && proof.swapped) {
-        try {
-          const values = await memory.request({command: 'root-native-worker-values', slot: 2});
-          if (values.values.every(value => value !== values.sentinel)) {
-            proof.startValues = values.values;
-            proof.servedAfterSwap = proof.requests.length - proof.swapIndex;
-            await save();
-            break;
-          }
-        } catch (error) { proof.workerValuesError = error.message; }
-        if (Date.now() - lastServedAt >= quietMs) break;
-      }
       // Do not re-serve a request the FS already consumed during the previous
       // serve window. stepServe snapshots the buffer right after the wake, so a
       // buffer that still matches it means the client has not queued anything
@@ -1089,6 +1077,23 @@ async function main() {
         try { pendingInfo = requestInfo(pending); } catch (error) {}
         const repeat = lastBuffer && pending === lastBuffer;
         if (repeat) sameWaits++; else sameWaits = 0;
+        // Poll the deferred pm:dmnt start only when the Loader has nothing new
+        // queued. A request queued on the parked session blocks the FS that
+        // serves the retained endpoint, so polling first stalls for the full
+        // RPC timeout and the loop gives up before serving the Loader's next
+        // request (the 22:57 run died exactly here after the NPDM close).
+        if (!pendingInfo || repeat) {
+          try {
+            const values = await memory.request({command: 'root-native-worker-values', slot: 2});
+            if (values.values.every(value => value !== values.sentinel)) {
+              proof.startValues = values.values;
+              proof.servedAfterSwap = proof.requests.length - proof.swapIndex;
+              await save();
+              break;
+            }
+          } catch (error) { proof.workerValuesError = error.message; }
+        }
+        if (Date.now() - lastServedAt >= quietMs) break;
         if (repeat) {
           if (pendingInfo?.kind === 'close') {
             if (sameWaits < 1) {
@@ -1231,10 +1236,16 @@ async function main() {
             continue;
           }
         }
-        // A 24-byte IFile Read is the request that frees its own domain entry
-        // and releases one reference. Add a reference first so the object
-        // survives until the Loader's close releases it.
-        if (pendingInfo?.kind === 'request' && pendingInfo.command === 0 &&
+        // A 24-byte IFile Read frees its own domain entry and releases the
+        // entry's reference. The earlier design added two CopyObject references
+        // so a *restored* entry could survive the close; with the freed-slot
+        // close that is not needed and is actively harmful: the file object is
+        // never destroyed, so its save-data transaction stays open and the
+        // Loader's next OpenFile (/main) on the same donor filesystem wedges the
+        // FS (22:57 run). Let the Read drop the last reference and run the
+        // file's destructor normally. Opt back in for the restore experiments.
+        if (process.env.NS2_LAUNCH_READ_REFERENCE === '1' &&
+            pendingInfo?.kind === 'request' && pendingInfo.command === 0 &&
             pendingInfo.input && pendingInfo.input.length === 48 &&
             !(proof.readRefs || []).some(ref => ref.entry === pendingInfo.object)) {
           try {
