@@ -670,12 +670,12 @@ async function main() {
       proof.completion = await memory.request({command: 'root-native-worker-settle'});
       }
     } else {
-    await gate.parkSession(); proof.parked = true; await save();
-    await memory.request({command: 'root-native-worker-release'});
-    // flags 0x10: the launch only creates the process. Read the pid, then run
-    // the deferred pm:dmnt start on a slot-2 worker so the host is free to
-    // capture and serve the queued mount request.
+    // flags 0x10 = StartSuspended: create the process while the FS session is
+    // still unparked (process creation reads the NPDM through it), then park the
+    // session and run the deferred pm:dmnt start on a slot-2 worker. Parking
+    // before the launch made the NPDM read block and wedged the endpoint.
     if (flags === 0x10) {
+      await memory.request({command: 'root-native-worker-release'});
       const monitor = state.services.find(x => x.name === 'pm:dmnt')?.handle;
       check(monitor, 'The owned PM monitor is missing');
       let pid = null;
@@ -692,6 +692,7 @@ async function main() {
         await new Promise(resolve => setTimeout(resolve, 25));
       }
       check(pid, 'The suspended launch returned no pid');
+      await gate.parkSession(); proof.parked = true; await save();
       proof.startWorker = await memory.request({command: 'root-native-worker-prepare', slot: 2,
         areaOffset: 0x100000, kind: 'pm-start', handle: monitor, pid: Number(pid)});
       proof.startRelease = await memory.request({command: 'root-native-worker-release', slot: 2});
@@ -699,6 +700,9 @@ async function main() {
       await save();
       console.log(JSON.stringify({stage: 'launch-start-worker', pid,
         thread: proof.startWorker.thread}));
+    } else {
+      await gate.parkSession(); proof.parked = true; await save();
+      await memory.request({command: 'root-native-worker-release'});
     }
     const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
