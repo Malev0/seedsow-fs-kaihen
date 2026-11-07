@@ -1163,6 +1163,25 @@ async function main() {
                 record.cleared = true;
                 await save();
               }
+              // The Read also puts the freed slot on the manager's free list.
+              // If another allocation (the FS's own background work) takes it
+              // between this read and the injected close, the close lands on a
+              // reused entry and releases the wrong object; that race is why the
+              // freed close is intermittent (22:57 succeeded, 23:10 and 23:26
+              // faulted). Pin the slot out of the free list while leaving
+              // +0x18/+0x20 zero, so UnregisterObject cannot match it and no
+              // allocator can reuse it.
+              const pinned = await unlinkFree(slot).catch(() => false);
+              record.pinned = pinned;
+              await save();
+              if (!pinned) {
+                // The slot already left the free list, so it may have been
+                // reused. Do not inject a close that could hit it.
+                (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object,
+                  reason: 'freed slot could not be pinned out of the free list'});
+                if (Date.now() - lastServedAt >= quietMs) break;
+                continue;
+              }
               try {
                 const step = await gate.stepServe({force: true, skipAfter: true});
                 servedFreedCloses.add(pendingInfo.object);
