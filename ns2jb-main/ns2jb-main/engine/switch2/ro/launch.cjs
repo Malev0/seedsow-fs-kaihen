@@ -892,11 +892,13 @@ async function main() {
       }
       let spare;
       try {
-        spare = await memory.request({command: 'root-native-file-spare', name: 'main.npdm', source: 'code'});
-      } catch (error) {
-        // The CodeFS binding is the stable source; the donor is the fallback if
-        // the analysis CodeFS was not retained on this boot.
+        // Use the donor save filesystem: its file objects are ordinary save
+        // files, and the adopted entry is linked into the same donor domain the
+        // session is migrated to. The CodeFS spare is only a fallback (its
+        // object is an aux-data file, which may have a special close path).
         spare = await memory.request({command: 'root-native-file-spare', name: 'main.npdm', source: 'donor'});
+      } catch (error) {
+        spare = await memory.request({command: 'root-native-file-spare', name: 'main.npdm', source: 'code'});
       }
       const spareSlot = table + (spare.id - 1) * 0x30;
       const sb = await memory.read(spareSlot, 0x30);
