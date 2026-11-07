@@ -394,6 +394,15 @@ async function dispatch(context, request, state, domain) {
       length <= 0x10000 && offset + length <= 0x60000, 'Invalid worker output range');
     return {hex: (await s.readOwned(worker.area + offset, length)).toString('hex')};
   }
+  if (command === 'worker-values') {
+    // Result cells only: no TryWaitThread and no response-page reads. This is
+    // safe to poll while the worker is inside svcSendSyncRequest, and it tells
+    // the launch loop when the deferred pm:dmnt start has returned.
+    check(worker, 'No worker is prepared');
+    const raw = await s.readOwned(worker.base + worker.resultOffsets[0], worker.resultOffsets.length * 8);
+    const values = worker.logicalResultIndices.map(i => raw.readBigUInt64LE(i * 8).toString());
+    return {values, sentinel: workerCode.SENTINEL.toString(), released: !!worker.released};
+  }
   check(worker && !worker.joined && s.threads.has(worker.thread), 'No active native worker');
   if (command === 'worker-discard-unreleased-launch') {
     check(worker.kind === 'pm-launch' && worker.launchTitle === '0x0400000000000037' &&
@@ -412,14 +421,6 @@ async function dispatch(context, request, state, domain) {
     worker.released = true;
     await save();
     return {released: true};
-  }
-  if (command === 'worker-values') {
-    // Result cells only: no TryWaitThread and no response-page reads. This is
-    // safe to poll while the worker is inside svcSendSyncRequest, and it tells
-    // the launch loop when the deferred pm:dmnt start has returned.
-    const raw = await s.readOwned(worker.base + worker.resultOffsets[0], worker.resultOffsets.length * 8);
-    const values = worker.logicalResultIndices.map(i => raw.readBigUInt64LE(i * 8).toString());
-    return {values, sentinel: workerCode.SENTINEL.toString(), released: !!worker.released};
   }
   if (command === 'worker-peek') {
     // Read the worker's result cells without TryWaitThread: that call blocks
