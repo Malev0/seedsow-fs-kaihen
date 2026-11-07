@@ -696,6 +696,9 @@ async function main() {
       }
       check(pid, 'The suspended launch returned no pid');
       await gate.parkSession(); proof.parked = true; await save();
+      proof.holderProbe = await memory.request({command: 'retained-holder-probe',
+        server: row.address, holder: gate.holder}); await save();
+      console.log(JSON.stringify({stage: 'holder-probe', ...proof.holderProbe, raw: undefined}));
       proof.startWorker = await memory.request({command: 'root-native-worker-prepare', slot: 2,
         areaOffset: 0x100000, kind: 'pm-start', handle: monitor, pid: Number(pid)});
       proof.startRelease = await memory.request({command: 'root-native-worker-release', slot: 2});
@@ -726,7 +729,7 @@ async function main() {
       }
       check(Date.now() < deadline, 'PM launch did not reach the parked FS session');
       const before = await entries(memory, layout, root.targetDomain);
-      const step = await gate.stepWake({force: flags === 0x10});
+      const step = await gate.stepServe({force: flags === 0x10});
       if (step.empty) continue;
       const info = requestInfo(step.request);
       const after = await entries(memory, layout, root.targetDomain);

@@ -77,6 +77,13 @@ async function main() {
       result.worker = await memory.request({command: 'root-native-worker-prepare', kind: 'control-test', handle: state.inspectionDomain.handle});
     result.park = await gate.parkSession(); await save();
     console.log('parked', result.park);
+    // Read-only holder probe: the FS writes row.address - 0x88 into the waiter's
+    // selected slot on a natural wake. Record the candidate before any inject so
+    // a freeze cannot hide the evidence.
+    result.holderProbe = await memory.request({command: 'retained-holder-probe',
+      server: row.address, holder: gate.holder});
+    await save();
+    console.log('holder probe', JSON.stringify(result.holderProbe));
     // Where does the FS actually keep the wait handle? The session points at one
     // 0x110-byte waiter entry; dumping it and searching for the three known
     // handles tells us whether the wait argument is stored there (and can be
@@ -213,6 +220,12 @@ async function main() {
     if (process.env.NS2_GATE_STEP_MODE === 'wake') {
       result.stopped = 'wake-only';
       console.log('wake-only mode: stopping after one wake (no second step, no join)');
+    } else if (process.env.NS2_GATE_STEP_MODE === 'inject') {
+      // Holder test: one injected real request is enough. If the app survives
+      // and the FS consumed the request, the corrected holder pointer is valid.
+      result.stopped = 'inject-once';
+      result.verified = result.watchAfterStep.alive;
+      console.log('inject mode: stopping after one injected request');
     } else if (process.env.NS2_GATE_UNPARK === '1') {
       // The unpark was the last app-side variant: 30 identical wake rows again in
       // the 04:09 run, and the join crashed the app. Stop before the join so a

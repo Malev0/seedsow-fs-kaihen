@@ -378,6 +378,12 @@ async function access(context, state, request) {
     const control = require("../ro/worker-control.cjs");
     await context.s.verifyCode(control.cancelCode, 'CancelSynchronization');
     const server = Number(request.server), parent = Number(request.parent);
+    // The FS stores the *holder* pointer in the waiter's selected slot when a
+    // wait completes; the observed natural selection is server - 0x88, not the
+    // session row. Writing server made ProcessAsSession dereference a session
+    // 0x88 into the object and hard-froze the console. Use the holder base and
+    // verify it before the store.
+    const holder = Number(request.holder ?? server - 0x88);
     // Check the selection before the session and the receipt marker last.
     // This order distinguishes a lost wake from an already completed receive.
     const waiter = await readMemory(context, state, parent + 0x10, 0x18);
@@ -395,17 +401,33 @@ async function access(context, state, request) {
     if (session.readBigUInt64LE(0x28) !== BigInt(parent) || session.readUInt32LE(0x40) !== 1)
       return {injected: false, retry: true, parent: Number(session.readBigUInt64LE(0x28)),
         state: session.readUInt32LE(0x40)};
+    // The holder is a distinct 0x88-byte object in front of the session fields.
+    // RegisterServerSessionToWait sets +0x38 (user data) to 1 and clears the
+    // defer byte at +0x70. Require both before the unverified store; a wrong
+    // candidate would otherwise be dereferenced by ProcessAsSession.
+    const candidate = await readMemory(context, state, holder, 0x88);
+    const vptr = candidate.readBigUInt64LE();
+    const userData = candidate.readBigUInt64LE(0x38);
+    const defer = candidate[0x70];
+    const owner = candidate.readBigUInt64LE(0x28);
+    const handle = candidate.readUInt32LE(0x30);
+    const proof = {holder, vptr: vptr.toString(), userData: userData.toString(), defer,
+      handle, owner: owner.toString()};
+    check(vptr >= 2 ** 32 && vptr < 2 ** 39, 'Holder vtable is not a mapped pointer');
+    check(userData === 1n, 'Holder user data is not a session');
+    check(defer === 0, 'Holder is marked deferred');
+    check(handle === Number(request.wait), 'Holder wait handle differs');
     const header = (await readMemory(context, state, Number(request.buffer), 4)).readUInt32LE();
-    if (header !== 0xffffffff) return {injected: false, acknowledged: true, header};
+    if (header !== 0xffffffff) return {injected: false, acknowledged: true, header, holderProof: proof};
     await setPointer(context, state, parent + 0x10);
-    const entry = {id: state.operations.length + 1, command, server, parent,
-      epoch: waiter.readBigUInt64LE(8).toString(),
+    const entry = {id: state.operations.length + 1, command, server, holder, parent,
+      epoch: waiter.readBigUInt64LE(8).toString(), holderProof: proof,
       started: new Date().toISOString(), corruptionCount: state.corruptionCount};
     state.operations.push(entry);
     await context.save();
     // A normal verified write performs another FS read. That can consume the
     // wake, so cancellation must immediately follow this unverified store.
-    await logicalWrite(context, state, state.dataOffset, u64(server));
+    await logicalWrite(context, state, state.dataOffset, u64(holder));
     entry.cancellations = await control.cancelWorkers(context);
     entry.injected = true;
     entry.finished = new Date().toISOString();
@@ -413,6 +435,24 @@ async function access(context, state, request) {
     await context.save();
     check(entry.cancellations.every(reply => reply.result === 0), 'Worker cancellation failed after injection');
     return entry;
+  }
+  if (command === 'holder-probe') {
+    // Read-only: report the candidate holder in front of the session so a test
+    // can record it before an injection can freeze the console.
+    const server = Number(request.server);
+    const holder = Number(request.holder ?? server - 0x88);
+    const candidate = await readMemory(context, state, holder, 0x88);
+    const session = await readMemory(context, state, server, 0x88);
+    return {server, holder,
+      vptr: candidate.readBigUInt64LE(0).toString(),
+      owner: candidate.readBigUInt64LE(0x28).toString(),
+      handle: candidate.readUInt32LE(0x30),
+      userData: candidate.readBigUInt64LE(0x38).toString(),
+      defer: candidate[0x70],
+      sessionWait: session.readUInt32LE(0x30),
+      sessionReceive: session.readUInt32LE(0x48),
+      sessionState: session.readUInt32LE(0x40),
+      raw: candidate.toString('hex')};
   }
   check(['select', 'read', 'write'].includes(command), 'Unknown retained-memory command');
   const address = Number(request.address);

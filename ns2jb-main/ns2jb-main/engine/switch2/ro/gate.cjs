@@ -14,6 +14,12 @@ class Gate {
     check(waiters.length === 7 && waiters.every((address, i) => address === waiters[0] + i * 0x110),
       'Expected the verified contiguous native waiter array');
     this.serverCopy = serverCopy;
+    // The FS writes the *holder* pointer into the waiter's selected slot when a
+    // wait completes. It is not the session row we bound: the observed natural
+    // selection is row.address - 0x88 (the holder base in front of the session
+    // fields). retained-inject-holder must write this value, not row.address.
+    this.holderDelta = Number(process.env.NS2_GATE_HOLDER_DELTA || 0x88);
+    this.holder = row.address - this.holderDelta;
     this.steps = [];
   }
 
@@ -177,13 +183,16 @@ class Gate {
     return step;
   }
 
-  async step({empty = false} = {}) {
+  async step({empty = false, force = false} = {}) {
     if (process.env.NS2_GATE_STEP_MODE === 'wake' || process.env.NS2_GATE_STEP_MODE === 'prime')
       return this.stepWake({empty});
     check(this.parked && !this.outstanding, 'Gate is not parked or an earlier step is unresolved');
     const before = await this.inspect();
-    console.log('step: inspect ok', JSON.stringify({state: before.state, parent: before.parent, empty}));
-    check(before.state === 1 && this.waiters.includes(before.parent) && await this.pending() === !empty,
+    console.log('step: inspect ok', JSON.stringify({state: before.state, parent: before.parent, empty, force}));
+    // force skips the readiness event: root-native-wait-zero has hung the
+    // console while the Loader request is queued on the parked session.
+    check(before.state === 1 && this.waiters.includes(before.parent) &&
+      (force || await this.pending() === !empty),
       empty ? 'An empty idle session is required to rebuild the wait array' : 'A queued request on an idle parked session is required');
     console.log('step: readiness ok');
     const original = await this.memory.read(this.row.request, 4);
@@ -198,9 +207,10 @@ class Gate {
       const epoch = this.waiters.includes(session.parent) ? (await this.memory.u64(session.parent + 0x18)).toString() : null;
       const header = await this.memory.u32(this.row.request);
       const injected = step.attempts.filter(a => a.injected).at(-1);
-      console.log('step loop', JSON.stringify({i, selected: selected.includes(this.row.address),
+      console.log('step loop', JSON.stringify({i, selected: selected.includes(this.holder),
+        holder: this.holder,
         header, state: session.state, receiveResult: session.receiveResult}));
-      if (empty && injected && !selected.includes(this.row.address) && header === 0xffffffff &&
+      if (empty && injected && !selected.includes(this.holder) && header === 0xffffffff &&
         session.state === 1 && session.receiveResult === 3 && this.waiters.includes(session.parent) &&
         (session.parent !== injected.parent || epoch !== injected.epoch)) {
         step.rebuilt = {parent: session.parent, epoch, receiveResult: session.receiveResult};
@@ -216,14 +226,15 @@ class Gate {
         check(!empty, 'An unexpected request arrived during the idle rebuild');
         return step;
       }
-      if (header !== 0xffffffff || selected.includes(this.row.address) || session.state !== 1 ||
+      if (header !== 0xffffffff || selected.includes(this.holder) || session.state !== 1 ||
         !this.waiters.includes(session.parent)) {
         await this.cancelOrWake();
         continue;
       }
-      check(await this.pending() === !empty, 'Server readiness changed before receipt');
+      if (!force) check(await this.pending() === !empty, 'Server readiness changed before receipt');
       const result = await this.memory.request({command: 'retained-inject-holder',
-        server: this.row.address, parent: session.parent, vptr: this.vptr,
+        server: this.row.address, holder: this.holder, wait: this.row.wait,
+        parent: session.parent, vptr: this.vptr,
         park: this.park, receive: this.row.receive, buffer: this.row.request,
         domain: this.row.domain, metadata: this.row.metadata});
       step.attempts.push(result);
@@ -234,12 +245,46 @@ class Gate {
     throw Error('One-shot request did not settle; inspect the saved step before retrying');
   }
 
+  // Serve exactly one already-queued request through the injected holder,
+  // without priming the header. The Loader path queues its request before the
+  // step, so wiping the header would destroy it. The session stays parked, so
+  // the FS serves only when we inject; that leaves the host free to swap the
+  // domain entry between two requests.
+  async stepServe({force = false} = {}) {
+    check(this.parked && !this.outstanding, 'Gate is not parked or an earlier step is unresolved');
+    const before = await this.inspect();
+    check(before.state === 1 && this.waiters.includes(before.parent), 'Session is not idle on a known waiter');
+    if (!force) check(await this.pending(), 'A queued request on an idle parked session is required');
+    const header = await this.memory.u32(this.row.request);
+    if (header === 0xffffffff)
+      return {empty: true, header: 'ffffffff', started: new Date().toISOString()};
+    const step = this.outstanding = {empty: false, mode: 'serve', attempts: [], started: new Date().toISOString()};
+    this.steps.push(step);
+    step.request = (await this.memory.read(this.row.request, 0x100)).toString('hex');
+    step.header = header.toString(16);
+    const result = await this.memory.request({command: 'retained-inject-holder',
+      server: this.row.address, holder: this.holder, wait: this.row.wait,
+      parent: before.parent, vptr: this.vptr,
+      park: this.park, receive: this.row.receive, buffer: this.row.request,
+      domain: this.row.domain, metadata: this.row.metadata});
+    step.attempts.push(result);
+    if (result.injected) {
+      await this.wake();
+      await new Promise(resolve => setTimeout(resolve, Number(process.env.NS2_GATE_SERVE_MS || 250)));
+    }
+    const after = await this.inspect();
+    step.sessionAfter = {state: after.state, receiveResult: after.receiveResult};
+    step.finished = new Date().toISOString();
+    delete this.outstanding;
+    return step;
+  }
+
   async restore() {
     if (!this.parked) return;
     const session = await this.inspect();
     check(session.state === 1 && this.waiters.includes(session.parent), 'Cannot restore an unsettled session');
     if (this.outstanding) {
-      check(!(await this.selections()).includes(this.row.address), 'A selection remains pending');
+      check(!(await this.selections()).includes(this.holder), 'A selection remains pending');
       const settled = await this.inspect();
       check(settled.state === 1 && this.waiters.includes(settled.parent), 'The last injection has not settled');
       if (await this.memory.u32(this.row.request) === 0xffffffff)
