@@ -155,6 +155,34 @@ async function main() {
   await save();
   console.log(JSON.stringify({stage: 'launch-prepared', file, wantedMount, flags,
     otherRow: otherRow ? otherRow.address : null}));
+  // Pay for the borrowed donor reference. The swap later points the Loader's
+  // save-FS entry at the donor object without incrementing its refcount. When
+  // the Loader's file is destroyed it releases its parent filesystem, so the
+  // donor must have a reference of its own or it is destroyed with the file.
+  try {
+    const owned = await memory.request({command: 'root-native-domain-open'});
+    const ownEntry = Number(layout.table) + (Number(owned.root) - 1) * 0x30;
+    const original = await memory.read(ownEntry, 0x30);
+    const borrowed = Buffer.from(original);
+    borrowed.writeBigUInt64LE(BigInt(donor.object), 0x20);
+    borrowed.writeBigUInt64LE(BigInt(donor.metadata), 0x28);
+    await memory.write(ownEntry, original, borrowed);
+    let copy;
+    try {
+      copy = await memory.request({command: 'root-native-domain-copy',
+        handle: Number(owned.handle), object: Number(owned.root)});
+    } finally {
+      await memory.write(ownEntry, borrowed, original);
+    }
+    check((await memory.read(ownEntry, 0x30)).equals(original),
+      'Inspection slot did not restore after the donor copy');
+    proof.donorReference = {object: Number(donor.object), copy: Number(copy.handle)};
+    await save();
+    console.log(JSON.stringify({stage: 'donor-reference', ...proof.donorReference}));
+  } catch (error) {
+    proof.donorReferenceError = error.message;
+    await save();
+  }
   let stopLiveness = null;
   // The Loader mount is not guaranteed to land in the domain that was bound at
   // boot: a launch can open a new fsp-srv session and ConvertToDomain it. Find
