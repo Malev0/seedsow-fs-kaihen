@@ -759,8 +759,8 @@ async function main() {
       // serve window. The FS keeps serving while the park event is signalled
       // (the signal and clear are two RPCs, so the window is ~100 ms), so a fast
       // client can queue several requests in that window; the buffer then holds
-      // the last request the FS already processed. stepServe captures the buffer
-      // before the clear, so a buffer that still matches it means the client has
+      // the last request the FS already processed. stepServe snapshots the buffer
+      // after the wake, so a buffer that still matches it means the client has
       // not queued anything new. A close whose target is already gone was also
       // consumed and must never be re-injected: a double-close faults the
       // console (the 02:20 run died exactly there). Other repeats fall through
