@@ -1298,6 +1298,29 @@ async function main() {
       const added = after.filter(a => !before.some(b => b.id === a.id && b.object === a.object));
       const record = {index: i, ...info, added, removed: before.filter(b => !after.some(a => a.id === b.id && a.object === b.object))};
       proof.requests.push(record);
+      // The Read frees the file's domain entry and releases the entry's
+      // reference, but the two CopyObject duplicates added by read-reference
+      // keep the file object alive. Release them now so the object's
+      // destructor runs and the save-data transaction closes before the
+      // Loader's next OpenFile (/main) on the same filesystem. Leaving it open
+      // is what wedged the FS after the close (22:57/23:26/23:43 runs).
+      if (info.kind === 'request' && info.command === 0 && info.input &&
+          info.input.length === 48) {
+        const ref = (proof.readRefs || []).find(item => item.entry === info.object && !item.released);
+        if (ref) {
+          for (const handle of [ref.copy, ref.copy2]) {
+            try {
+              await memory.request({command: 'root-native-domain-close', object: handle});
+            } catch (error) {
+              (proof.releaseErrors ||= []).push({entry: info.object, handle, error: error.message});
+            }
+          }
+          ref.released = true;
+          await save();
+          console.log(JSON.stringify({stage: 'read-released', index: i, entry: info.object,
+            released: [ref.copy, ref.copy2]}));
+        }
+      }
       const rootId = (root.targetEntry - layout.table) / 0x30 + 1;
       if (info.kind === 'request' && info.object === rootId && info.command === 0) {
         const input = Buffer.from(info.input, 'hex');
