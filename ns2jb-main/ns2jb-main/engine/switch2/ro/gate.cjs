@@ -287,7 +287,7 @@ class Gate {
         domain: this.row.domain, metadata: this.row.metadata});
       step.attempts.push(result);
       if (result.injected) { injected = true; break; }
-      if (result.acknowledged) break;
+      if (result.acknowledged || result.empty) break;
       // A selected slot may already hold this session from the park wake. If it
       // is ours, one wake serves it; otherwise retire the stale selection first.
       if (result.selected !== undefined && result.selected === this.holder) {
@@ -302,6 +302,7 @@ class Gate {
     }
     const after = await this.inspect();
     step.injected = injected;
+    step.empty = !injected && step.attempts.some(attempt => attempt.empty);
     step.sessionAfter = {state: after.state, receiveResult: after.receiveResult};
     step.finished = new Date().toISOString();
     delete this.outstanding;
