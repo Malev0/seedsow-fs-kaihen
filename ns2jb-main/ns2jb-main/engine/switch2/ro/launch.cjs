@@ -720,6 +720,8 @@ async function main() {
     }
     const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
+    const quietMs = Number(process.env.NS2_LAUNCH_QUIET_MS || 15000);
+    let lastServed = null, lastServedAt = Date.now(), sameWaits = 0;
     for (let i = 0; i < 160; i++) {
       if (flags === 0x10) {
         // No worker-peek here: reading the worker's response area while it is
@@ -736,9 +738,40 @@ async function main() {
         if ((await memory.request({command: 'root-native-worker-state'})).finished) break;
       }
       check(Date.now() < deadline, 'PM launch did not reach the parked FS session');
+      // After the exchange the Loader still owns the FS session: it must open
+      // and read the payload main through the swapped entry, and the Loader's
+      // subsequent requests are served by the donor object. Breaking here (the
+      // 01:45 run) left OpenFile queued forever and the launched process
+      // faulted. Keep serving until the deferred pm:dmnt start returns.
+      if (flags === 0x10 && proof.swapped) {
+        try {
+          const values = await memory.request({command: 'root-native-worker-values', slot: 2});
+          if (values.values.every(value => value !== values.sentinel)) {
+            proof.startValues = values.values;
+            proof.servedAfterSwap = proof.requests.length - proof.swapIndex;
+            await save();
+            break;
+          }
+        } catch (error) { proof.workerValuesError = error.message; }
+        if (Date.now() - lastServedAt >= quietMs) break;
+      }
+      // Do not re-serve the request that is still sitting in the buffer while
+      // the Loader processes the last reply. A legitimate repeat falls through
+      // after three waits, so this can never stall the launch.
+      if (flags === 0x10 && proof.swapped && lastServed) {
+        const pending = (await memory.read(row.request, 0x100)).toString('hex');
+        if (pending === lastServed) {
+          sameWaits++;
+          if (sameWaits < 5) continue;
+        } else sameWaits = 0;
+      }
       const before = await entries(memory, layout, root.targetDomain);
       const step = await gate.stepServe({force: flags === 0x10});
-      if (step.empty) continue;
+      if (step.empty) {
+        if (proof.swapped && Date.now() - lastServedAt >= quietMs) break;
+        continue;
+      }
+      lastServed = step.request; lastServedAt = Date.now(); sameWaits = 0;
       const info = requestInfo(step.request);
       const after = await entries(memory, layout, root.targetDomain);
       const added = after.filter(a => !before.some(b => b.id === a.id && b.object === a.object));
@@ -790,15 +823,14 @@ async function main() {
             await memory.pointer(code.entry + 0x20) === donor.object &&
             await memory.pointer(donor.entry + 0x18) === donor.domain &&
             await memory.pointer(donor.entry + 0x20) === code.object, 'Owning-reference exchange did not verify');
-          proof.swapped = true; await save();
+          proof.swapped = true; proof.swapIndex = proof.requests.length; await save();
           console.log(JSON.stringify({stage: 'filesystem-exchanged', file, mount: proof.mounts, object: code.id}));
           break;
         }
       }
-      if (proof.swapped) break;
       await save();
       console.log(JSON.stringify({stage: 'stepped', index: i, kind: info.kind, object: info.object,
-        command: info.command, added: added.map(a => a.id), mounts: proof.mounts}));
+        command: info.command, added: added.map(a => a.id), mounts: proof.mounts, swapped: proof.swapped}));
     }
     }
   } catch (error) {
@@ -818,12 +850,24 @@ async function main() {
     await save();
   }
   if (!serve) {
-    const until = Date.now() + 20000;
-    while (!(await memory.request({command: 'root-native-worker-state'})).finished) {
-      check(Date.now() < until, 'PM did not complete after the gate was restored');
-      await new Promise(resolve => setTimeout(resolve, 50));
+    if (flags === 0x10) {
+      // The loop watched slot 2's result cells, so settle both workers without
+      // the blocking TryWaitThread join. Slot 1 is the suspended launch (pid),
+      // slot 2 is the deferred pm:dmnt start whose result is the launch result.
+      proof.settled = {};
+      for (const slot of [1, 2]) {
+        try { proof.settled[slot] = await memory.request({command: 'root-native-worker-settle', slot}); }
+        catch (error) { (proof.settleErrors ||= {})[slot] = error.message; }
+      }
+      proof.completion = proof.settled[2] || proof.settled[1];
+    } else {
+      const until = Date.now() + 20000;
+      while (!(await memory.request({command: 'root-native-worker-state'})).finished) {
+        check(Date.now() < until, 'PM did not complete after the gate was restored');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      proof.completion = await memory.request({command: 'root-native-worker-join'});
     }
-    proof.completion = await memory.request({command: 'root-native-worker-join'});
   }
   check(proof.completion, 'The launch worker did not return a completion');
   const reply = proof.completion.responses?.[0] || {};
