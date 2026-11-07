@@ -718,39 +718,108 @@ async function main() {
       await gate.parkSession(); proof.parked = true; await save();
       await memory.request({command: 'root-native-worker-release'});
     }
-    // The CodeFS IStorage Read unlinks its domain entry from the target
-    // domain's list (the 02:53 run: sentinel.next went 142 -> 139) but leaves
-    // the slot's object/domain/metadata. The Loader still sends close(142) and
-    // waits for the reply, so re-link the slot at the head of the list before
-    // serving that close. Only do it when the object vtable still looks mapped;
-    // otherwise the object was freed and re-linking would fault.
-    async function recoverEntry(id) {
+    // The 03:16 captures settle the read: the save-filesystem IFile Read frees
+    // its own domain entry (slot 142 came back self-linked, +0x18/+0x20 zero,
+    // and the sentinel skipped it), and the Loader still sends close(142) and
+    // blocks on the reply. Serving a close for the freed slot faults (the
+    // 02:20 run). The Loader only needs the close to succeed, so borrow the
+    // loader root object with one extra reference: the close releases that
+    // reference, while the real root (entry 9) keeps its own. The slot is
+    // removed from the domain free list first so the FS cannot hand it out a
+    // second time and create a cycle. If the entry is still populated (only
+    // unlinked), keep the old cheap re-link.
+    async function unlinkFree(slot) {
+      const manager = Number(layout.manager), count = Number(layout.count);
+      const table = Number(layout.table);
+      if (!Number.isSafeInteger(manager) || manager < 2 ** 32 ||
+          !Number.isSafeInteger(table) || !Number.isInteger(count)) return false;
+      const inside = at => at >= table && at < table + count * 0x30 && (at - table) % 0x30 === 0;
+      const headAddr = manager + 0x28;
+      const head = await memory.pointer(headAddr);
+      if (head === slot) {
+        const b = await memory.read(slot, 0x30);
+        await memory.writeU64(headAddr, slot, ptr(b, 0x10));
+        return true;
+      }
+      let at = head;
+      for (let n = 0; n < count && at; n++) {
+        if (!inside(at)) return false;
+        const b = await memory.read(at, 0x30);
+        const next = ptr(b, 0x10);
+        if (next === slot) {
+          const s = await memory.read(slot, 0x30);
+          await memory.writeU64(at + 0x10, slot, ptr(s, 0x10));
+          return true;
+        }
+        at = next;
+      }
+      return false;
+    }
+
+    async function repairClose(id) {
       const table = Number(layout.table), count = Number(layout.count);
       if (!Number.isInteger(id) || id <= 0 || id > count) return null;
       const slot = table + (id - 1) * 0x30;
       const b = await memory.read(slot, 0x30);
       const object = Number(b.readBigUInt64LE(0x20));
-      if (!Number.isSafeInteger(object) || object < 2 ** 32 || object >= 2 ** 39) return null;
-      const vptr = await memory.pointer(object);
-      if (vptr < 2 ** 32 || vptr >= 2 ** 39) return null;
+      if (Number.isSafeInteger(object) && object >= 2 ** 32 && object < 2 ** 39) {
+        // Still populated: the read only unlinked it. Re-link the same object.
+        const vptr = await memory.pointer(object);
+        if (vptr >= 2 ** 32 && vptr < 2 ** 39) {
+          const sentinel = Number(root.targetDomain) + 0x20;
+          const sNext = await memory.pointer(sentinel);
+          const updated = Buffer.from(b);
+          updated.writeBigUInt64LE(BigInt(sNext), 0x00);
+          updated.writeBigUInt64LE(BigInt(sentinel), 0x08);
+          updated.writeBigUInt64LE(BigInt(root.targetDomain), 0x18);
+          await memory.write(slot, b, updated);
+          if (sNext !== sentinel) {
+            const prev = (await memory.read(sNext + 0x08, 8)).readBigUInt64LE();
+            await memory.writeU64(sNext + 0x08, Number(prev), slot);
+          }
+          await memory.writeU64(sentinel, sNext, slot);
+          return {mode: 'relink', id, slot, object, vptr, sNext};
+        }
+      }
+      // Freed entry: point it at the loader root with a borrowed reference.
+      const rootId = (root.targetEntry - table) / 0x30 + 1;
+      const rootEntry = table + (rootId - 1) * 0x30;
+      const rb = await memory.read(rootEntry, 0x30);
+      const rootObject = Number(rb.readBigUInt64LE(0x20));
+      const rootMeta = Number(rb.readBigUInt64LE(0x28));
+      if (!(rootObject >= 2 ** 32 && rootObject < 2 ** 39) ||
+          !(rootMeta >= 2 ** 32 && rootMeta < 2 ** 39)) return null;
+      // copy-loader-root proved this field is the root object's reference
+      // count (1 -> 2 on CopyFromCurrentDomain, 2 -> 1 on handle close).
+      const refBytes = await memory.read(rootObject + 0x38, 4);
+      const ref = refBytes.readUInt32LE();
+      if (!(ref > 0 && ref < 0x10000)) return null;
+      const bumped = Buffer.alloc(4); bumped.writeUInt32LE(ref + 1);
+      await memory.write(rootObject + 0x38, refBytes, bumped);
+      const unlinked = await unlinkFree(slot).catch(() => false);
       const sentinel = Number(root.targetDomain) + 0x20;
       const sNext = await memory.pointer(sentinel);
       const updated = Buffer.from(b);
       updated.writeBigUInt64LE(BigInt(sNext), 0x00);
       updated.writeBigUInt64LE(BigInt(sentinel), 0x08);
+      updated.writeBigUInt64LE(0n, 0x10);
       updated.writeBigUInt64LE(BigInt(root.targetDomain), 0x18);
+      updated.writeBigUInt64LE(BigInt(rootObject), 0x20);
+      updated.writeBigUInt64LE(BigInt(rootMeta), 0x28);
       await memory.write(slot, b, updated);
       if (sNext !== sentinel) {
         const prev = (await memory.read(sNext + 0x08, 8)).readBigUInt64LE();
         await memory.writeU64(sNext + 0x08, Number(prev), slot);
       }
       await memory.writeU64(sentinel, sNext, slot);
-      return {id, slot, object, vptr, sNext};
+      return {mode: 'root', id, slot, object: rootObject, metadata: rootMeta,
+        ref, unlinked};
     }
     const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
     const quietMs = Number(process.env.NS2_LAUNCH_QUIET_MS || 15000);
     let lastBuffer = null, lastServedAt = Date.now(), sameWaits = 0;
+    let closeServeKey = null, closeServeCount = 0;
     for (let i = 0; i < 160; i++) {
       if (flags === 0x10) {
         // No worker-peek here: reading the worker's response area while it is
@@ -785,28 +854,46 @@ async function main() {
         if (Date.now() - lastServedAt >= quietMs) break;
       }
       // Do not re-serve a request the FS already consumed during the previous
-      // serve window. The FS keeps serving while the park event is signalled
-      // (the signal and clear are two RPCs, so the window is ~100 ms), so a fast
-      // client can queue several requests in that window; the buffer then holds
-      // the last request the FS already processed. stepServe snapshots the buffer
-      // after the wake, so a buffer that still matches it means the client has
-      // not queued anything new. A close whose target is already gone was also
-      // consumed and must never be re-injected: a double-close faults the
-      // console (the 02:20 run died exactly there). Other repeats fall through
+      // serve window. stepServe snapshots the buffer right after the wake, so a
+      // buffer that still matches it means the client has not queued anything
+      // new. A close is special: the save-file Read frees its own entry and the
+      // Loader blocks on the close (the 03:16 run), so a close still present one
+      // full iteration later is pending and gets a repaired target. A close the
+      // FS already consumed is followed by the Loader's next request within that
+      // iteration, so it does not match again. Non-close repeats fall through
       // after two waits so a genuine repeat cannot stall the launch.
-      let pending = null, pendingInfo = null;
+      let pending = null, pendingInfo = null, pendingRepair = null;
       if (flags === 0x10 && proof.swapped) {
         pending = (await memory.read(row.request, 0x100)).toString('hex');
         try { pendingInfo = requestInfo(pending); } catch (error) {}
+        const repeat = lastBuffer && pending === lastBuffer;
+        if (repeat) sameWaits++; else sameWaits = 0;
+        if (repeat) {
+          if (pendingInfo?.kind === 'close') {
+            if (sameWaits < 1) {
+              if (Date.now() - lastServedAt >= quietMs) break;
+              continue;
+            }
+          } else if (sameWaits < 2) continue;
+        }
         if (pendingInfo?.kind === 'close') {
+          if (closeServeKey !== pendingInfo.object) { closeServeKey = pendingInfo.object; closeServeCount = 0; }
+          if (++closeServeCount > 2) {
+            (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object,
+              reason: 'close repeated after repair'});
+            if (Date.now() - lastServedAt >= quietMs) break;
+            continue;
+          }
           const current = await entries(memory, layout, root.targetDomain);
           if (!current.some(entry => entry.id === pendingInfo.object)) {
-            const recovered = await recoverEntry(pendingInfo.object).catch(error => {
+            const repaired = await repairClose(pendingInfo.object).catch(error => {
               (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
               return null;
             });
-            if (recovered) {
-              (proof.recoveredCloses ||= []).push({index: i, ...recovered});
+            if (repaired) {
+              pendingRepair = repaired;
+              if (repaired.mode === 'root') (proof.rootCloses ||= []).push({index: i, ...repaired});
+              else (proof.recoveredCloses ||= []).push({index: i, ...repaired});
               await save();
             } else {
               (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object});
@@ -815,15 +902,25 @@ async function main() {
             }
           }
         }
-        if (lastBuffer && pending === lastBuffer) {
-          sameWaits++;
-          if (sameWaits < 2) continue;
-        } else sameWaits = 0;
         if (pendingInfo)
           console.log(JSON.stringify({stage: 'serving', index: i, ...pendingInfo}));
       }
       const before = await entries(memory, layout, root.targetDomain);
       const step = await gate.stepServe({force: flags === 0x10});
+      if (pendingRepair) {
+        // The borrowed reference should be released by the close, leaving the
+        // real root entry (and its own reference) intact.
+        if (pendingRepair.mode === 'root') {
+          try {
+            const afterRef = await memory.u32(pendingRepair.object + 0x38);
+            (proof.closeRefs ||= []).push({index: i, mode: pendingRepair.mode,
+              before: pendingRepair.ref, after: afterRef, ok: afterRef === pendingRepair.ref});
+          } catch (error) {
+            (proof.closeRefs ||= []).push({index: i, mode: pendingRepair.mode, error: error.message});
+          }
+        }
+        pendingRepair = null;
+      }
       if (step.empty) {
         if (proof.swapped && Date.now() - lastServedAt >= quietMs) break;
         continue;
@@ -831,6 +928,7 @@ async function main() {
       lastBuffer = step.bufferAfterWake || step.request;
       lastServedAt = Date.now(); sameWaits = 0;
       const info = requestInfo(step.request);
+      if (info.kind !== 'close') { closeServeKey = null; closeServeCount = 0; }
       const after = await entries(memory, layout, root.targetDomain);
       const added = after.filter(a => !before.some(b => b.id === a.id && b.object === a.object));
       const record = {index: i, ...info, added, removed: before.filter(b => !after.some(a => a.id === b.id && a.object === b.object))};
@@ -899,7 +997,7 @@ async function main() {
     if (stopLiveness) await stopLiveness();
     // A wedged endpoint or a dead console makes restore throw; record it
     // instead of masking the error that ended the stage.
-    if (proof.staleCloses?.length && !proof.recoveredCloses?.length) {
+    if (proof.staleCloses?.length) {
       // The Loader is blocked on a close whose domain entry we could not
       // restore. Signalling the parked session would make the FS process that
       // close and fault the console (the 02:53 restore), so leave it parked and
