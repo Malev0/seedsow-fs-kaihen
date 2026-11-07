@@ -298,6 +298,15 @@ class Gate {
     }
     if (injected) {
       await this.wake();
+      // The FS keeps serving for as long as the park event is signalled (the
+      // signal and clear are two RPCs, so the window is ~100 ms). A fast client
+      // can queue several requests in that window; this snapshot (taken after
+      // the clear) is what the launch loop compares against to decide whether
+      // the client has queued a new request or the buffer still holds a
+      // consumed one. A consumed close is additionally rejected by its domain
+      // entry being gone, so a double-close can never be re-injected.
+      try { step.bufferAfterWake = (await this.memory.read(this.row.request, 0x100)).toString('hex'); }
+      catch (error) { step.bufferAfterWakeError = error.message; }
       await new Promise(resolve => setTimeout(resolve, Number(process.env.NS2_GATE_SERVE_MS || 250)));
     }
     const after = await this.inspect();

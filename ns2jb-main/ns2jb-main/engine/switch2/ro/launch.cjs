@@ -721,7 +721,7 @@ async function main() {
     const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
     const quietMs = Number(process.env.NS2_LAUNCH_QUIET_MS || 15000);
-    let lastServed = null, lastServedAt = Date.now(), sameWaits = 0;
+    let lastBuffer = null, lastServedAt = Date.now(), sameWaits = 0;
     for (let i = 0; i < 160; i++) {
       if (flags === 0x10) {
         // No worker-peek here: reading the worker's response area while it is
@@ -755,15 +755,34 @@ async function main() {
         } catch (error) { proof.workerValuesError = error.message; }
         if (Date.now() - lastServedAt >= quietMs) break;
       }
-      // Do not re-serve the request that is still sitting in the buffer while
-      // the Loader processes the last reply. A legitimate repeat falls through
-      // after three waits, so this can never stall the launch.
-      if (flags === 0x10 && proof.swapped && lastServed) {
-        const pending = (await memory.read(row.request, 0x100)).toString('hex');
-        if (pending === lastServed) {
+      // Do not re-serve a request the FS already consumed during the previous
+      // serve window. The FS keeps serving while the park event is signalled
+      // (the signal and clear are two RPCs, so the window is ~100 ms), so a fast
+      // client can queue several requests in that window; the buffer then holds
+      // the last request the FS already processed. stepServe captures the buffer
+      // before the clear, so a buffer that still matches it means the client has
+      // not queued anything new. A close whose target is already gone was also
+      // consumed and must never be re-injected: a double-close faults the
+      // console (the 02:20 run died exactly there). Other repeats fall through
+      // after two waits so a genuine repeat cannot stall the launch.
+      let pending = null, pendingInfo = null;
+      if (flags === 0x10 && proof.swapped) {
+        pending = (await memory.read(row.request, 0x100)).toString('hex');
+        try { pendingInfo = requestInfo(pending); } catch (error) {}
+        if (pendingInfo?.kind === 'close') {
+          const current = await entries(memory, layout, root.targetDomain);
+          if (!current.some(entry => entry.id === pendingInfo.object)) {
+            (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object});
+            if (Date.now() - lastServedAt >= quietMs) break;
+            continue;
+          }
+        }
+        if (lastBuffer && pending === lastBuffer) {
           sameWaits++;
-          if (sameWaits < 5) continue;
+          if (sameWaits < 2) continue;
         } else sameWaits = 0;
+        if (pendingInfo)
+          console.log(JSON.stringify({stage: 'serving', index: i, ...pendingInfo}));
       }
       const before = await entries(memory, layout, root.targetDomain);
       const step = await gate.stepServe({force: flags === 0x10});
@@ -771,7 +790,8 @@ async function main() {
         if (proof.swapped && Date.now() - lastServedAt >= quietMs) break;
         continue;
       }
-      lastServed = step.request; lastServedAt = Date.now(); sameWaits = 0;
+      lastBuffer = step.bufferAfterWake || step.request;
+      lastServedAt = Date.now(); sameWaits = 0;
       const info = requestInfo(step.request);
       const after = await entries(memory, layout, root.targetDomain);
       const added = after.filter(a => !before.some(b => b.id === a.id && b.object === a.object));
