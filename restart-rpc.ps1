@@ -26,7 +26,7 @@ if ($LASTEXITCODE -ne 0) { Write-Output 'refresh mounts failed'; exit 1 }
 Write-Output '=== start bridge ==='
 $p = Start-Process -FilePath node -ArgumentList (Join-Path $TOOLS 'seedsow-bridge.cjs') -WorkingDirectory $PSScriptRoot `
   -RedirectStandardOutput (Join-Path $PSScriptRoot 'bridge.log') `
-  -RedirectStandardError (Join-Path $PSScriptRoot 'bridge.err') -PassThru
+  -RedirectStandardError (Join-Path $PSScriptRoot 'bridge.err') -WindowStyle Hidden -PassThru
 Start-Sleep -Seconds 3
 Write-Output "bridge pid=$($p.Id) fast=$($env:NS2_FAST)"
 Get-Content (Join-Path $PSScriptRoot 'bridge.log') -Tail 5 -ErrorAction SilentlyContinue

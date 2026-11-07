@@ -15,7 +15,7 @@ function Test-Gui {
 if (-not (Test-Gui)) {
   Start-Process -FilePath node -ArgumentList (Join-Path $gui 'ns2-gui.cjs') -WorkingDirectory $PSScriptRoot `
     -RedirectStandardOutput (Join-Path $gui 'gui.log') `
-    -RedirectStandardError (Join-Path $gui 'gui.err') | Out-Null
+    -RedirectStandardError (Join-Path $gui 'gui.err') -WindowStyle Hidden | Out-Null
   for ($i = 0; $i -lt 30; $i++) {
     if (Test-Gui) { break }
     Start-Sleep -Milliseconds 300
