@@ -721,99 +721,35 @@ async function main() {
     // The 03:16 captures settle the read: the save-filesystem IFile Read frees
     // its own domain entry (slot 142 came back self-linked, +0x18/+0x20 zero,
     // and the sentinel skipped it), and the Loader still sends close(142) and
-    // blocks on the reply. Serving a close for the freed slot faults (the
-    // 02:20 run). The Loader only needs the close to succeed, so borrow the
-    // loader root object with one extra reference: the close releases that
-    // reference, while the real root (entry 9) keeps its own. The slot is
-    // removed from the domain free list first so the FS cannot hand it out a
-    // second time and create a cycle. If the entry is still populated (only
-    // unlinked), keep the old cheap re-link.
-    async function unlinkFree(slot) {
-      const manager = Number(layout.manager), count = Number(layout.count);
-      const table = Number(layout.table);
-      if (!Number.isSafeInteger(manager) || manager < 2 ** 32 ||
-          !Number.isSafeInteger(table) || !Number.isInteger(count)) return false;
-      const inside = at => at >= table && at < table + count * 0x30 && (at - table) % 0x30 === 0;
-      const headAddr = manager + 0x28;
-      const head = await memory.pointer(headAddr);
-      if (head === slot) {
-        const b = await memory.read(slot, 0x30);
-        await memory.writeU64(headAddr, slot, ptr(b, 0x10));
-        return true;
-      }
-      let at = head;
-      for (let n = 0; n < count && at; n++) {
-        if (!inside(at)) return false;
-        const b = await memory.read(at, 0x30);
-        const next = ptr(b, 0x10);
-        if (next === slot) {
-          const s = await memory.read(slot, 0x30);
-          await memory.writeU64(at + 0x10, slot, ptr(s, 0x10));
-          return true;
-        }
-        at = next;
-      }
-      return false;
-    }
-
-    async function repairClose(id) {
-      const table = Number(layout.table), count = Number(layout.count);
-      if (!Number.isInteger(id) || id <= 0 || id > count) return null;
-      const slot = table + (id - 1) * 0x30;
-      const b = await memory.read(slot, 0x30);
-      const object = Number(b.readBigUInt64LE(0x20));
-      if (Number.isSafeInteger(object) && object >= 2 ** 32 && object < 2 ** 39) {
-        // Still populated: the read only unlinked it. Re-link the same object.
-        const vptr = await memory.pointer(object);
-        if (vptr >= 2 ** 32 && vptr < 2 ** 39) {
-          const sentinel = Number(root.targetDomain) + 0x20;
-          const sNext = await memory.pointer(sentinel);
-          const updated = Buffer.from(b);
-          updated.writeBigUInt64LE(BigInt(sNext), 0x00);
-          updated.writeBigUInt64LE(BigInt(sentinel), 0x08);
-          updated.writeBigUInt64LE(BigInt(root.targetDomain), 0x18);
-          await memory.write(slot, b, updated);
-          if (sNext !== sentinel) {
-            const prev = (await memory.read(sNext + 0x08, 8)).readBigUInt64LE();
-            await memory.writeU64(sNext + 0x08, Number(prev), slot);
-          }
-          await memory.writeU64(sentinel, sNext, slot);
-          return {mode: 'relink', id, slot, object, vptr, sNext};
-        }
-      }
-      // Freed entry: point it at the loader root with a borrowed reference.
-      const rootId = (root.targetEntry - table) / 0x30 + 1;
-      const rootEntry = table + (rootId - 1) * 0x30;
-      const rb = await memory.read(rootEntry, 0x30);
-      const rootObject = Number(rb.readBigUInt64LE(0x20));
-      const rootMeta = Number(rb.readBigUInt64LE(0x28));
-      if (!(rootObject >= 2 ** 32 && rootObject < 2 ** 39) ||
-          !(rootMeta >= 2 ** 32 && rootMeta < 2 ** 39)) return null;
-      // copy-loader-root proved this field is the root object's reference
-      // count (1 -> 2 on CopyFromCurrentDomain, 2 -> 1 on handle close).
-      const refBytes = await memory.read(rootObject + 0x38, 4);
-      const ref = refBytes.readUInt32LE();
-      if (!(ref > 0 && ref < 0x10000)) return null;
-      const bumped = Buffer.alloc(4); bumped.writeUInt32LE(ref + 1);
-      await memory.write(rootObject + 0x38, refBytes, bumped);
-      const unlinked = await unlinkFree(slot).catch(() => false);
-      const sentinel = Number(root.targetDomain) + 0x20;
-      const sNext = await memory.pointer(sentinel);
-      const updated = Buffer.from(b);
-      updated.writeBigUInt64LE(BigInt(sNext), 0x00);
-      updated.writeBigUInt64LE(BigInt(sentinel), 0x08);
-      updated.writeBigUInt64LE(0n, 0x10);
-      updated.writeBigUInt64LE(BigInt(root.targetDomain), 0x18);
-      updated.writeBigUInt64LE(BigInt(rootObject), 0x20);
-      updated.writeBigUInt64LE(BigInt(rootMeta), 0x28);
-      await memory.write(slot, b, updated);
-      if (sNext !== sentinel) {
-        const prev = (await memory.read(sNext + 0x08, 8)).readBigUInt64LE();
-        await memory.writeU64(sNext + 0x08, Number(prev), slot);
-      }
-      await memory.writeU64(sentinel, sNext, slot);
-      return {mode: 'root', id, slot, object: rootObject, metadata: rootMeta,
-        ref, unlinked};
+    // blocks on the reply. Serving that close dereferences a freed object and
+    // faults (02:20), and fabricating an entry from the loader root also killed
+    // the FS (03:58) because a root-session close tears down the session. The
+    // Loader only checks the reply's result, so answer the blocked close with a
+    // read-only GetEntryType on the donor filesystem: the FS replies result 0,
+    // the Loader's close returns success, and nothing is allocated or freed.
+    // The path lives in the Loader's own 0x100-byte message buffer.
+    async function substituteClose(id) {
+      const objectId = Number(proof.exchange?.code?.id);
+      if (!Number.isInteger(objectId) || objectId <= 0) return null;
+      const base = Number(row.request), pathAddr = base + 0x80;
+      const packet = Buffer.alloc(0x100);
+      packet.writeUInt32LE(0x00010006, 0);        // type 6, one send descriptor
+      packet.writeUInt32LE(12, 4);                 // 48-byte message
+      const a = BigInt(pathAddr);
+      packet.writeUInt32LE(Number((0x80n << 16n) | ((a >> 36n) & 7n) << 6n |
+        ((a >> 32n) & 15n) << 12n) >>> 0, 8);
+      packet.writeUInt32LE(Number(a & 0xffffffffn), 12);
+      packet[16] = 1;                              // domain request marker
+      packet.writeUInt16LE(16, 18);
+      packet.writeUInt32LE(objectId, 20);          // donor filesystem entry
+      packet.writeUInt32LE(0, 28);
+      packet.write('SFCI', 32);
+      packet.writeUInt32LE(1, 36);
+      packet.writeUInt32LE(7, 40);                 // GetEntryType
+      packet.write('/main.npdm\0', 0x80, 'utf8');
+      const current = await memory.read(base, 0x100);
+      await memory.write(base, current, packet);
+      return {id, object: objectId, command: 7, path: '/main.npdm', pathAddr};
     }
     const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
@@ -858,11 +794,12 @@ async function main() {
       // buffer that still matches it means the client has not queued anything
       // new. A close is special: the save-file Read frees its own entry and the
       // Loader blocks on the close (the 03:16 run), so a close still present one
-      // full iteration later is pending and gets a repaired target. A close the
-      // FS already consumed is followed by the Loader's next request within that
-      // iteration, so it does not match again. Non-close repeats fall through
-      // after two waits so a genuine repeat cannot stall the launch.
-      let pending = null, pendingInfo = null, pendingRepair = null;
+      // full iteration later is pending and gets a read-only request
+      // substituted for it. A close the FS already consumed is followed by the
+      // Loader's next request within that iteration, so it does not match again.
+      // Non-close repeats fall through after two waits so a genuine repeat
+      // cannot stall the launch.
+      let pending = null, pendingInfo = null;
       if (flags === 0x10 && proof.swapped) {
         pending = (await memory.read(row.request, 0x100)).toString('hex');
         try { pendingInfo = requestInfo(pending); } catch (error) {}
@@ -886,14 +823,13 @@ async function main() {
           }
           const current = await entries(memory, layout, root.targetDomain);
           if (!current.some(entry => entry.id === pendingInfo.object)) {
-            const repaired = await repairClose(pendingInfo.object).catch(error => {
+            const substituted = await substituteClose(pendingInfo.object).catch(error => {
               (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
               return null;
             });
-            if (repaired) {
-              pendingRepair = repaired;
-              if (repaired.mode === 'root') (proof.rootCloses ||= []).push({index: i, ...repaired});
-              else (proof.recoveredCloses ||= []).push({index: i, ...repaired});
+            if (substituted) {
+              (proof.substitutedCloses ||= []).push({index: i, ...substituted});
+              console.log(JSON.stringify({stage: 'close-substituted', index: i, ...substituted}));
               await save();
             } else {
               (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object});
@@ -907,20 +843,6 @@ async function main() {
       }
       const before = await entries(memory, layout, root.targetDomain);
       const step = await gate.stepServe({force: flags === 0x10});
-      if (pendingRepair) {
-        // The borrowed reference should be released by the close, leaving the
-        // real root entry (and its own reference) intact.
-        if (pendingRepair.mode === 'root') {
-          try {
-            const afterRef = await memory.u32(pendingRepair.object + 0x38);
-            (proof.closeRefs ||= []).push({index: i, mode: pendingRepair.mode,
-              before: pendingRepair.ref, after: afterRef, ok: afterRef === pendingRepair.ref});
-          } catch (error) {
-            (proof.closeRefs ||= []).push({index: i, mode: pendingRepair.mode, error: error.message});
-          }
-        }
-        pendingRepair = null;
-      }
       if (step.empty) {
         if (proof.swapped && Date.now() - lastServedAt >= quietMs) break;
         continue;
