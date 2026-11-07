@@ -794,6 +794,49 @@ async function main() {
       return {id, slot, object: removed.object, metadata: removed.metadata, vptr, sNext};
     }
 
+    // The Read frees the file object itself: the removed record's object now
+    // reads back as heap data (0x8), so it cannot be restored. Open a throwaway
+    // file in the donor filesystem's domain, add a second reference with
+    // CopyObject, and point the freed slot at that live object instead. The FS
+    // releases one reference when it serves the close; the copy handle keeps the
+    // object alive, and the donor save filesystem the Loader still needs for
+    // /main is never touched.
+    async function spareEntryForClose(id) {
+      const table = Number(layout.table), count = Number(layout.count);
+      if (!Number.isInteger(id) || id <= 0 || id > count) return null;
+      const slot = table + (id - 1) * 0x30;
+      const b = await memory.read(slot, 0x30);
+      if (ptr(b, 0x18) !== 0 || ptr(b, 0x20) !== 0) return null;
+      const spare = await memory.request({command: 'root-native-file-spare', name: 'main.npdm'});
+      const spareSlot = table + (spare.id - 1) * 0x30;
+      const sb = await memory.read(spareSlot, 0x30);
+      const object = ptr(sb, 0x20), metadata = ptr(sb, 0x28);
+      if (!(object >= 2 ** 32 && object < 2 ** 39) ||
+          !(metadata >= 2 ** 32 && metadata < 2 ** 39)) return null;
+      const vptr = await memory.pointer(object);
+      if (!(vptr >= 2 ** 32 && vptr < 2 ** 39)) return null;
+      if (!await unlinkFree(slot).catch(() => false)) return null;
+      const sentinel = Number(root.targetDomain) + 0x20;
+      const sNext = await memory.pointer(sentinel);
+      const updated = Buffer.from(b);
+      updated.writeBigUInt64LE(BigInt(sNext), 0x00);
+      updated.writeBigUInt64LE(BigInt(sentinel), 0x08);
+      updated.writeBigUInt64LE(0n, 0x10);
+      updated.writeBigUInt64LE(BigInt(root.targetDomain), 0x18);
+      updated.writeBigUInt64LE(BigInt(object), 0x20);
+      updated.writeBigUInt64LE(BigInt(metadata), 0x28);
+      await memory.write(slot, b, updated);
+      if (sNext !== sentinel) {
+        const prev = (await memory.read(sNext + 0x08, 8)).readBigUInt64LE();
+        await memory.writeU64(sNext + 0x08, Number(prev), slot);
+      }
+      await memory.writeU64(sentinel, sNext, slot);
+      const readback = await memory.read(slot, 0x30);
+      if (ptr(readback, 0x18) !== Number(root.targetDomain) || ptr(readback, 0x20) !== object)
+        return null;
+      return {id, slot, object, metadata, vptr, sNext, spare: spare.id, copy: spare.handle};
+    }
+
     const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
     const quietMs = Number(process.env.NS2_LAUNCH_QUIET_MS || 15000);
@@ -864,14 +907,18 @@ async function main() {
             if (Date.now() - lastServedAt >= quietMs) break;
             continue;
           }
-          // The read unlinks its own domain entry and zeroes +0x18/+0x20, but
-          // the file object is still alive and the served-request record has
-          // its pointer. Restore the slot from that record and serve the close
-          // so the Loader's NPDM thread finishes and the deferred pm:dmnt start
-          // can return. If the object no longer looks mapped, leave it stale.
+          // The read unlinks its own domain entry, zeroes +0x18/+0x20 and frees
+          // the file object itself, so the removed record cannot be restored.
+          // Point the freed slot at a fresh throwaway file object (with an extra
+          // CopyObject reference) and serve the close so the Loader's NPDM thread
+          // finishes and the deferred pm:dmnt start can return. If neither a
+          // spare object nor the removed record looks live, leave it stale.
           const current = await entries(memory, layout, root.targetDomain);
           if (!current.some(entry => entry.id === pendingInfo.object)) {
-            const recovered = await recoverRemovedEntry(pendingInfo.object).catch(error => {
+            const recovered = await spareEntryForClose(pendingInfo.object).catch(error => {
+              (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
+              return null;
+            }) || await recoverRemovedEntry(pendingInfo.object).catch(error => {
               (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
               return null;
             });

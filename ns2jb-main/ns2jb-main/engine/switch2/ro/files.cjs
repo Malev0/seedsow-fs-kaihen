@@ -296,6 +296,34 @@ async function dispatch(context, request, state, domain) {
       return entry;
     } finally { if (safeToClose) await s.close(child); }
   }
+  // Open a throwaway file in the donor filesystem's domain and add a second
+  // reference to it. The Loader's freed-file close is answered by pointing the
+  // freed slot at this live object: the FS releases one reference, the copy
+  // handle keeps the object alive, and the donor save filesystem is untouched.
+  if (command === 'file-spare') {
+    const name = request.name || 'main.npdm';
+    const donor = state.donor;
+    check(donor?.ready && donor.root > 0 && s.handles.has(donor.handle),
+      'Spare file requires the converted donor filesystem');
+    const {domainPathPacket} = require('../app/filesystem.cjs');
+    const filename = Buffer.alloc(0x301); filename.write('/' + name);
+    await s.write(s.base + 0x2000, filename);
+    const mode = Buffer.alloc(4); mode.writeUInt32LE(1);
+    const opened = await domain.send(s, 'RO spare: open /' + name, donor.handle,
+      domainPathPacket(donor.root, 8, mode, s.base + 0x2000), {domain: true});
+    check(!opened.result && opened.objects.length === 1,
+      'Spare file did not open in the donor domain: ' + opened.canonicalResult);
+    const id = opened.objects[0];
+    check(Number.isInteger(id) && id > 0 && id <= 0x4000, 'Spare object ID exceeds the domain capacity');
+    const input = Buffer.alloc(4); input.writeUInt32LE(id);
+    const copied = await domain.send(s, 'RO spare: CopyObject', donor.handle,
+      domain.wire.control(1, input));
+    check(!copied.result, 'Spare object copy failed: ' + copied.canonicalResult);
+    const handle = domain.oneHandle(copied);
+    const entry = {at: new Date().toISOString(), name, id, handle};
+    (state.spareObjects ||= []).push(entry); await save();
+    return entry;
+  }
   throw Error('Unknown native file operation');
 }
 
