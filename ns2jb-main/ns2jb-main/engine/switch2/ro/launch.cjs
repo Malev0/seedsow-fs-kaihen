@@ -972,10 +972,22 @@ async function main() {
               countAddr, originalCount, slot: slotBefore.toString('hex')});
             await save();
             let step;
+            // Keep the low-count window as short as possible: the FS serves
+            // while the park event stays signalled, so a fast Loader could
+            // queue its next request into the same window. 5 ms is enough for
+            // the close receive/reply and far too short for the next OpenFile.
+            const wakeMs = process.env.NS2_GATE_WAKE_MS;
+            const serveMs = process.env.NS2_GATE_SERVE_MS;
+            process.env.NS2_GATE_WAKE_MS = '5';
+            process.env.NS2_GATE_SERVE_MS = '0';
             try {
               await memory.write(countAddr, original, hidden);
               step = await gate.stepServe({force: true});
             } finally {
+              if (wakeMs === undefined) delete process.env.NS2_GATE_WAKE_MS;
+              else process.env.NS2_GATE_WAKE_MS = wakeMs;
+              if (serveMs === undefined) delete process.env.NS2_GATE_SERVE_MS;
+              else process.env.NS2_GATE_SERVE_MS = serveMs;
               await memory.write(countAddr, hidden, original);
             }
             (proof.closesServed ||= []).push({index: i, id: pendingInfo.object,
