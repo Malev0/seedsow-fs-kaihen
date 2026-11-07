@@ -907,7 +907,15 @@ async function main() {
             if (recovered) {
               (proof.recoveredCloses ||= []).push({index: i, ...recovered});
               console.log(JSON.stringify({stage: 'close-recovered', index: i, ...recovered}));
+              // Do not serve this close through the injected holder: the close
+              // handler faults on that path (11:38 spare, 11:51 own object).
+              // Hand the session back instead; gate.restore() writes the real
+              // wait handle and signals, so the FS's normal server loop receives
+              // and processes the queued close. The Loader then continues on its
+              // other session, so nothing after this needs the gate.
+              proof.closeHandedBack = true;
               await save();
+              break;
             } else {
               (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object,
                 reason: 'close target is no longer in the target domain'});
