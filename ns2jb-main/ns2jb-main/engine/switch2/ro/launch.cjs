@@ -751,32 +751,39 @@ async function main() {
           input.readBigUInt64LE(8) === BigInt(proof.target), 'The queued CodeFS mount is not the selected native target');
         proof.mounts++;
         record.targetMount = proof.mounts;
-        check(added.length === 1 && added[0].metadata === donor.metadata, 'Target mount did not return one compatible filesystem');
-        if (proof.mounts === wantedMount) {
-          const code = added[0], currentDonor = await memory.read(donor.entry, 0x30);
-          check(currentDonor.subarray(0x18).equals(Buffer.from(donor.raw, 'hex').subarray(0x18)) &&
-            await memory.pointer(code.object) === donor.vptr && await memory.pointer(donor.object) === donor.vptr,
-          'Filesystem identity or concrete adapter type changed');
-          proof.exchange = {code, donor, started: new Date().toISOString(), firstWritten: false, secondWritten: false};
-          await save();
-          await memory.writeU64(code.entry + 0x20, code.object, donor.object);
-          proof.exchange.firstWritten = true; await save();
-          try {
-            await memory.writeU64(donor.entry + 0x20, donor.object, code.object);
-            proof.exchange.secondWritten = true; await save();
-          } catch (error) {
-            check(await memory.pointer(donor.entry + 0x20) === donor.object, 'Donor write failed without restoration');
-            await memory.writeU64(code.entry + 0x20, donor.object, code.object);
-            proof.exchange.rolledBack = true; await save();
-            throw error;
+        // The entry metadata is not a stable identity: the first mount returns
+        // donor.metadata + 8 (a different interface adapter). The concrete
+        // object vptr is the real check. Swap the first mount whose adapter
+        // matches the donor, regardless of which mount number it is.
+        if (added.length === 1) {
+          const adapterVptr = await memory.pointer(added[0].object);
+          record.adapter = {metadata: added[0].metadata, vptr: adapterVptr};
+          if (adapterVptr === donor.vptr) {
+            const code = added[0], currentDonor = await memory.read(donor.entry, 0x30);
+            check(currentDonor.subarray(0x18).equals(Buffer.from(donor.raw, 'hex').subarray(0x18)) &&
+              await memory.pointer(donor.object) === donor.vptr,
+            'Filesystem identity or concrete adapter type changed');
+            proof.exchange = {code, donor, started: new Date().toISOString(), firstWritten: false, secondWritten: false};
+            await save();
+            await memory.writeU64(code.entry + 0x20, code.object, donor.object);
+            proof.exchange.firstWritten = true; await save();
+            try {
+              await memory.writeU64(donor.entry + 0x20, donor.object, code.object);
+              proof.exchange.secondWritten = true; await save();
+            } catch (error) {
+              check(await memory.pointer(donor.entry + 0x20) === donor.object, 'Donor write failed without restoration');
+              await memory.writeU64(code.entry + 0x20, donor.object, code.object);
+              proof.exchange.rolledBack = true; await save();
+              throw error;
+            }
+            check(await memory.pointer(code.entry + 0x18) === root.targetDomain &&
+              await memory.pointer(code.entry + 0x20) === donor.object &&
+              await memory.pointer(donor.entry + 0x18) === donor.domain &&
+              await memory.pointer(donor.entry + 0x20) === code.object, 'Owning-reference exchange did not verify');
+            proof.swapped = true; await save();
+            console.log(JSON.stringify({stage: 'filesystem-exchanged', file, mount: proof.mounts, object: code.id}));
+            break;
           }
-          check(await memory.pointer(code.entry + 0x18) === root.targetDomain &&
-            await memory.pointer(code.entry + 0x20) === donor.object &&
-            await memory.pointer(donor.entry + 0x18) === donor.domain &&
-            await memory.pointer(donor.entry + 0x20) === code.object, 'Owning-reference exchange did not verify');
-          proof.swapped = true; await save();
-          console.log(JSON.stringify({stage: 'filesystem-exchanged', file, mount: proof.mounts, object: code.id}));
-          break;
         }
       }
       await save();
