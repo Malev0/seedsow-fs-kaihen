@@ -1039,6 +1039,7 @@ async function main() {
     const quietMs = Number(process.env.NS2_LAUNCH_QUIET_MS || 15000);
     let lastBuffer = null, lastServedAt = Date.now(), sameWaits = 0;
     let closeServeKey = null, closeServeCount = 0;
+    const servedFreedCloses = new Set();
     for (let i = 0; i < 160; i++) {
       if (flags === 0x10) {
         // No worker-peek here: reading the worker's response area while it is
@@ -1097,6 +1098,13 @@ async function main() {
           } else if (sameWaits < 2) continue;
         }
         if (pendingInfo?.kind === 'close') {
+          if (servedFreedCloses.has(pendingInfo.object)) {
+            // Already answered as a freed slot; the Loader has not queued its
+            // next request yet. Do not inject the same close a second time and
+            // do not let the repeat guard mark it stale.
+            if (Date.now() - lastServedAt >= quietMs) break;
+            continue;
+          }
           if (closeServeKey !== pendingInfo.object) { closeServeKey = pendingInfo.object; closeServeCount = 0; }
           if (++closeServeCount > 2) {
             (proof.staleCloses ||= []).push({index: i, object: pendingInfo.object,
@@ -1121,6 +1129,56 @@ async function main() {
               Math.abs(vp - Number(donor.vptr)) < 0x100000;
           }
           if (!live) {
+            // fs.elf +0x219EA0 (CmifServerDomain::UnregisterObject) only
+            // touches an entry whose owning domain (+0x18) equals the caller's
+            // domain; otherwise it returns a null object and the close succeeds
+            // without releasing anything. The Read frees its own entry
+            // (+0x18/+0x20 = 0), so the close is already safe as-is. Resurrecting
+            // the slot (restore/adopt) makes the close release a live FS object
+            // and is what faulted the FS at 11:10..22:20.
+            if (process.env.NS2_LAUNCH_CLOSE_ADOPT !== '1' &&
+                !servedFreedCloses.has(pendingInfo.object)) {
+              const slot = Number(layout.table) + (pendingInfo.object - 1) * 0x30;
+              const raw = await memory.read(slot, 0x30).catch(() => null);
+              const owner = raw ? ptr(raw, 0x18) : null;
+              const object = raw ? ptr(raw, 0x20) : null;
+              const record = {index: i, id: pendingInfo.object, slot, owner, object,
+                raw: raw ? raw.toString('hex') : null};
+              (proof.closeSlots ||= []).push(record);
+              console.log(JSON.stringify({stage: 'close-slot', index: i,
+                id: pendingInfo.object, owner, object}));
+              // The slot is off the domain list but may still carry an owner if
+              // the Read only unlinked it. Clear the owner/object so the close
+              // cannot release it. The +0x00/+0x08 links are untouched.
+              if (raw && (owner !== 0 || object !== 0)) {
+                const cleared = Buffer.from(raw);
+                cleared.writeBigUInt64LE(0n, 0x18);
+                cleared.writeBigUInt64LE(0n, 0x20);
+                await memory.write(slot, raw, cleared);
+                record.cleared = true;
+                await save();
+              }
+              try {
+                const step = await gate.stepServe({force: true, skipAfter: true});
+                servedFreedCloses.add(pendingInfo.object);
+                (proof.closesServed ||= []).push({index: i, id: pendingInfo.object,
+                  empty: !!step.empty, target: 'freed',
+                  request: step.request ? step.request.slice(0, 64) : null});
+                await save();
+                console.log(JSON.stringify({stage: 'close-served', index: i,
+                  id: pendingInfo.object, target: 'freed', empty: !!step.empty}));
+                lastBuffer = step.bufferAfterWake || step.request;
+                lastServedAt = Date.now(); sameWaits = 0;
+                continue;
+              } catch (error) {
+                // Never hand a failed close back to the FS: the 14:37 fallback
+                // did exactly that and faulted. Keep the session parked.
+                proof.closeServeError = error.stack;
+                proof.heldClose = true;
+                await save();
+                throw error;
+              }
+            }
             if (process.env.NS2_LAUNCH_CLOSE_HANDBACK === '1') {
               const recovered = await recoverRemovedEntry(pendingInfo.object).catch(error => {
                 (proof.recoverErrors ||= []).push({index: i, object: pendingInfo.object, error: error.message});
