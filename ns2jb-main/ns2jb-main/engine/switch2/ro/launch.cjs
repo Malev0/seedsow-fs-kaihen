@@ -274,20 +274,33 @@ async function main() {
       console.log(JSON.stringify({stage: 'launch-armed', file, armed: proof.armed}));
       if (process.env.NS2_LAUNCH_SOCKET_MAIN === '1') {
         // Diagnostic: run the raw socket chain on the app's main thread before
-        // any worker exists. If this connects, the offset and the network path
-        // are good and the worker thread is the remaining variable. Try both
-        // connect overloads; a crash on the first one ends the loop.
+        // any worker exists. Test the sockaddr byte orders and the bind-style
+        // zero address; the working bind uses the same 16-byte layout.
+        const make = (ip, port, little) => {
+          const sa = Buffer.alloc(16);
+          sa[0] = 2; sa.writeUInt16BE(port, 2);
+          if (little) sa.writeUInt32LE(ip >>> 0, 4); else sa.writeUInt32BE(ip >>> 0, 4);
+          return sa.toString('hex');
+        };
+        const host = dumpHost();
+        const ip = host.split('.').reduce((a, b) => (a * 256) + Number(b), 0) >>> 0;
+        const port = Number(process.env.NS2_DUMP_PORT || 39401);
+        const cases = [
+          ['zero', make(0, 0, false)],
+          ['pc-be', make(ip, port, false)],
+          ['pc-le', make(ip, port, true)],
+          ['console-be', make(3232235994, 8080, false)],
+          ['console-le', make(3232235994, 8080, true)]
+        ];
         proof.socketMain = [];
-        for (const candidate of [0x14d3d0, 0x14d3c0]) {
-          const row = {pcAddress: dumpHost(), port: Number(process.env.NS2_DUMP_PORT || 39401),
-            connect: candidate};
+        for (const [name, sockaddr] of cases) {
+          const row = {name, connect: 0x14d3d0, sockaddr};
           try {
             Object.assign(row, await memory.request({command: 'root-native-socket-test',
-              pcAddress: row.pcAddress, port: row.port, connect: candidate}));
+              sockaddr, connect: 0x14d3d0}));
           } catch (error) { row.error = error.message; }
           proof.socketMain.push(row);
           await save();
-          if (row.error) break;
         }
         throw Error('Socket main-thread diagnostic complete; see proof.socketMain');
       }

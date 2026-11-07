@@ -158,9 +158,15 @@ async function dispatch(context, request, state, domain) {
     // worker thread's socket path is the problem; a main-thread crash means the
     // offset is wrong.
     const scratch = s.base + 0x1000;
-    const sa = Buffer.alloc(16);
-    sa[0] = 2; sa.writeUInt16BE(Number(request.port || 39401), 2);
-    sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
+    let sa;
+    if (typeof request.sockaddr === 'string' && /^[0-9a-fA-F]{32}$/.test(request.sockaddr)) {
+      sa = Buffer.from(request.sockaddr, 'hex');
+    } else {
+      sa = Buffer.alloc(16);
+      sa[0] = 2; sa.writeUInt16BE(Number(request.port || 39401), 2);
+      if (request.little) sa.writeUInt32LE(Number(request.pcAddress) >>> 0, 4);
+      else sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
+    }
     await s.write(scratch, sa);
     const payload = Buffer.from('SEEDSOW-MAIN-TEST\n');
     await s.write(scratch + 0x100, payload);
