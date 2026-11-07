@@ -154,9 +154,10 @@ class Gate {
     // before it replies. Each iteration is logged so a stuck handler is obvious.
     const attempts = process.env.NS2_GATE_STEP_MODE === 'prime' ? 30 : 1;
     step.wakes = [];
+    const settleMs = Number(process.env.NS2_GATE_STEP_MS || (attempts > 1 ? 100 : 250));
     for (let i = 0; i < attempts; i++) {
       await this.wake();
-      await new Promise(resolve => setTimeout(resolve, attempts > 1 ? 100 : 250));
+      await new Promise(resolve => setTimeout(resolve, settleMs));
       const pending = await this.pending();
       const header = await this.memory.u32(this.row.request);
       const session = await this.inspect(!unpark);

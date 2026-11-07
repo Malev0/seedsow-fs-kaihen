@@ -672,15 +672,44 @@ async function main() {
     } else {
     await gate.parkSession(); proof.parked = true; await save();
     await memory.request({command: 'root-native-worker-release'});
+    // flags 0x10: the launch only creates the process. Read the pid, then run
+    // the deferred pm:dmnt start on a slot-2 worker so the host is free to
+    // capture and serve the queued mount request.
+    if (flags === 0x10) {
+      const monitor = state.services.find(x => x.name === 'pm:dmnt')?.handle;
+      check(monitor, 'The owned PM monitor is missing');
+      let pid = null;
+      const until = Date.now() + 30000;
+      while (Date.now() < until) {
+        const peek = await memory.request({command: 'root-native-worker-peek'});
+        if (peek.values.every(value => value !== peek.sentinel)) {
+          const reply = response(Buffer.from(peek.responses[0], 'hex'));
+          if (reply.result !== 0) throw Error('The suspended launch failed: ' + reply.result);
+          pid = reply.data && reply.data.length >= 8
+            ? reply.data.readBigUInt64LE().toString() : null;
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      check(pid, 'The suspended launch returned no pid');
+      proof.startWorker = await memory.request({command: 'root-native-worker-prepare', slot: 2,
+        areaOffset: 0x100000, kind: 'pm-start', handle: monitor, pid: Number(pid)});
+      proof.startRelease = await memory.request({command: 'root-native-worker-release', slot: 2});
+      proof.start = {result: 0, worker: true}; proof.startPid = pid;
+      await save();
+      console.log(JSON.stringify({stage: 'launch-start-worker', pid,
+        thread: proof.startWorker.thread}));
+    }
+    const launchSlot = flags === 0x10 ? 2 : 1;
     const deadline = Date.now() + 240000;
     for (let i = 0; i < 160; i++) {
       while (!await gate.pending()) {
-        const worker = await memory.request({command: 'root-native-worker-state'});
+        const worker = await memory.request({command: 'root-native-worker-state', slot: launchSlot});
         if (worker.finished) break;
         check(Date.now() < deadline, 'PM launch did not reach the parked FS session');
         await new Promise(resolve => setTimeout(resolve, 25));
       }
-      if ((await memory.request({command: 'root-native-worker-state'})).finished) break;
+      if ((await memory.request({command: 'root-native-worker-state', slot: launchSlot})).finished) break;
       const before = await entries(memory, layout, root.targetDomain);
       const step = await gate.step(), info = requestInfo(step.request);
       const after = await entries(memory, layout, root.targetDomain);
