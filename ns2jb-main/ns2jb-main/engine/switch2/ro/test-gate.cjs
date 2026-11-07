@@ -66,13 +66,13 @@ async function main() {
   const file = path.join(__dirname, memory.info.session + '-gate-test-' + Date.now() + '.json');
   const save = () => fs.writeFile(file, JSON.stringify(result, null, 2) + '\n', {mode: 0o600});
   await save();
+  // The control-test worker proved the ordering on 2026-11-04 23:49, but its
+  // thread never reaches a joinable state on this build: TryWaitThread blocks
+  // inside pthread_exit and the join wedged the memory endpoint in the 00:21
+  // run. The gate re-arm is what this stage has to certify now; ro/launch
+  // releases its own worker. Set NS2_GATE_WORKER=1 for the old probe.
+  const workerTest = process.env.NS2_GATE_WORKER === '1';
   try {
-    // The control-test worker proved the ordering on 2026-11-04 23:49, but its
-    // thread never reaches a joinable state on this build: TryWaitThread blocks
-    // inside pthread_exit and the join wedged the memory endpoint in the 00:21
-    // run. The gate re-arm is what this stage has to certify now; ro/launch
-    // releases its own worker. Set NS2_GATE_WORKER=1 for the old probe.
-    const workerTest = process.env.NS2_GATE_WORKER === '1';
     if (workerTest)
       result.worker = await memory.request({command: 'root-native-worker-prepare', kind: 'control-test', handle: state.inspectionDomain.handle});
     // Read-only holder probe BEFORE parking. The FS wait chain links the session
