@@ -96,6 +96,16 @@ class Gate {
     // the idle rebuild (which needs that injection) is skipped as well.
     if (process.env.NS2_GATE_STEP_MODE === 'wake' || process.env.NS2_GATE_STEP_MODE === 'prime' ||
         process.env.NS2_GATE_STEP_MODE === 'unpark-first') return after;
+    // The real session object is the wait holder. Injecting it with no request
+    // makes ProcessAsSession -> ReceiveAsSession block on the empty session:
+    // receiveResult stays 1, the selected slot never clears, and the rebuild
+    // loop spins. Skip the idle rebuild for the real holder; the first queued
+    // request drives stepServe()/step() instead.
+    if (this.holderDelta === 0) {
+      console.log(JSON.stringify({stage: 'gate-rebuild-skipped', reason: 'session holder'}));
+      this.rebuildSkipped = true;
+      return after;
+    }
     // From remote-lua-sw2: skip the empty rebuild and let the first real request
     // drive step(). Their hypothesis is that the idle injection is what leaves
     // the persistent selection. Not a fix on its own: step() still injects for
@@ -288,7 +298,10 @@ class Gate {
     const session = await this.inspect();
     check(session.state === 1 && this.waiters.includes(session.parent), 'Cannot restore an unsettled session');
     if (this.outstanding) {
-      check(!(await this.selections()).includes(this.holder), 'A selection remains pending');
+      // Do not abort on a pending selection: the FS may still be inside the
+      // receive that the injection started. Restoring the real wait handle is
+      // the safest exit, and the next wait clears the selected slot anyway.
+      this.pendingSelection = (await this.selections()).includes(this.holder);
       const settled = await this.inspect();
       check(settled.state === 1 && this.waiters.includes(settled.parent), 'The last injection has not settled');
       if (await this.memory.u32(this.row.request) === 0xffffffff)

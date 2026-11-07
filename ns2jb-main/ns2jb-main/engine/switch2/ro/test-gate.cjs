@@ -208,7 +208,10 @@ async function main() {
     console.log('stepping the real request');
     result.domainBefore = await countDomainEntries();
     console.log('domain entries before', result.domainBefore);
-    await gate.step(); await save();
+    // Serve the queued request through the real session holder. step() only
+    // captures a newly arriving request; stepServe() injects the session object
+    // and wakes the FS so the request is actually received and replied to.
+    await gate.stepServe({force: true}); await save();
     console.log('real request stepped');
     result.headerAfterWake = (await memory.u32(row.request)).toString(16);
     result.domainAfter = await countDomainEntries();
