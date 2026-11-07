@@ -966,8 +966,28 @@ async function main() {
         await memory.writeU64(row.address + 0x70, currentDomain, spareDomain);
         row.domain = spareDomain;
       }
-      const header = await memory.read(object, 0x80).then(b => b.toString('hex')).catch(() => null);
-      return {id, slot: target, object, metadata, vptr, header, spare: spare.id,
+      // The close path appears to run a destructor even when CopyObject has
+      // duplicated the handle (13:52, 21:40). Inflate the object's two atomic
+      // reference counters before the close so a refcounted release cannot
+      // reach zero. The object is intentionally leaked; a live leaked file is
+      // harmless, a destructor run during the close faults the FS.
+      const headerBytes = await memory.read(object, 0x80).catch(() => null);
+      let refs = null;
+      if (headerBytes) {
+        const bumped = Buffer.from(headerBytes);
+        refs = {};
+        for (const off of [0x28, 0x58]) {
+          const value = bumped.readBigUInt64LE(off);
+          const low = value & 0xffffffffffffn;
+          if ((value >> 63n) === 1n && low < 0x1000n) {
+            refs['0x' + off.toString(16)] = value.toString();
+            bumped.writeBigUInt64LE((value & (1n << 63n)) | (low + 0x100n), off);
+          }
+        }
+        if (Object.keys(refs).length) await memory.write(object, headerBytes, bumped);
+      }
+      const header = headerBytes ? headerBytes.toString('hex') : null;
+      return {id, slot: target, object, metadata, vptr, header, refs, spare: spare.id,
         copy: spare.handle, spareDomain, sNext, migrated, sessionDomain: spareDomain};
     }
 
