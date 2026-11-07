@@ -711,7 +711,7 @@ async function main() {
       }
       if ((await memory.request({command: 'root-native-worker-state', slot: launchSlot})).finished) break;
       const before = await entries(memory, layout, root.targetDomain);
-      const step = await gate.step(), info = requestInfo(step.request);
+      const step = await gate.stepWake(), info = requestInfo(step.request);
       const after = await entries(memory, layout, root.targetDomain);
       const added = after.filter(a => !before.some(b => b.id === a.id && b.object === a.object));
       const record = {index: i, ...info, added, removed: before.filter(b => !after.some(a => a.id === b.id && a.object === b.object))};
