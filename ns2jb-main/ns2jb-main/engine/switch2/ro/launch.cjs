@@ -473,11 +473,17 @@ async function main() {
               const pid = reply.data && reply.data.length >= 8
                 ? reply.data.readBigUInt64LE().toString() : null;
               if (reply.result === 0 && pid) {
-                proof.start = await memory.request({command: 'root-native-ipc', handle: monitor,
-                  id: 1, hex: encodeU64(BigInt(pid)).toString('hex')});
+                // The start is itself a blocking svcSendSyncRequest: it cannot
+                // return until the Loader's mount request is served. Run it on a
+                // slot-2 worker so the host stays free to poll the table.
+                proof.startWorker = await memory.request({command: 'root-native-worker-prepare',
+                  slot: 2, areaOffset: 0x100000, kind: 'pm-start', handle: monitor, pid: Number(pid)});
+                proof.startRelease = await memory.request({command: 'root-native-worker-release', slot: 2});
+                proof.start = {result: 0, worker: true};
                 proof.startPid = pid; startSent = true;
                 await save();
-                console.log(JSON.stringify({stage: 'launch-start', pid, result: proof.start.result}));
+                console.log(JSON.stringify({stage: 'launch-start-worker', pid,
+                  thread: proof.startWorker.thread}));
               } else proof.startWaiting = {result: reply.result, pid};
             }
           } catch (error) { proof.startError = error.message; await save(); }
