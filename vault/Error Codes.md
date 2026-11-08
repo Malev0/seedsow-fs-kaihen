@@ -11,19 +11,22 @@ The code tells you **which layer** died.
 
 | Code | Meaning | What we saw |
 |---|---|---|
-| `2162-0002` | application error (this app) | flags-0 launch / deferred start |
-| `2168-0002` | application error (this app) | earlier flags-0 / start runs |
+| `2162-0002` | **system module aborted** (module 162 `Err`, description 2; raw `0x4A2` = `svcBreak`) | flags-0 launch / deferred start, handback tail |
+| `2168-0002` | application error (module 168 `Creport`) | an application (not a sysmodule) crashed |
 | no code, full freeze | system-level hang | the `inject-holder` delivered-request freeze |
 
 > [!important] What it means for us
-> An application-error screen means **our app faulted**, not the system. The FS and the
-> console survived. A silent freeze with no code is worse: the system itself is stuck.
+> The displayed code is `2000 + module` (switchbrew). `2162-0002` is **not** the app:
+> it is the Err module reporting that a **system module executed `svcBreak`**. The FS,
+> the Loader, or the launched RO are system modules; the app is an application and
+> would show `2168-0002` (Creport). Do not use `2162-0002` to decide which process died.
 
 > [!note] 2162-0002 and the retained endpoint (2026-11-05)
-> A `flags 0` load produced `2162-0002`, but `gate.restore()` still succeeded: the app's
-> HTTP/Lua side died while the FS session and the retained endpoint stayed alive. So an
-> error screen does **not** mean the boot's data is lost; a post-load dump can still work
-> even when `:8080` is closed.
+> A `flags 0` load produced `2162-0002`, but `gate.restore()` still succeeded: the
+> aborted system module did not take the whole console down, and the app's HTTP/Lua
+> side could survive while the FS session stayed alive. So an error screen does **not**
+> mean the boot's data is lost; a post-load dump can still work even when `:8080` is
+> closed.
 
 ## Native result codes you will see in proofs
 

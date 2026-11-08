@@ -34,7 +34,8 @@ is the practical subset.
 
 | Symptom | Meaning |
 |---|---|
-| app shows `2162-0002` or `2168-0002` | the application faulted; system survived; power-button restart |
+| app shows `2162-0002` | a **system module** aborted (`Err`, `0x4A2` = `svcBreak`): the FS, Loader, or launched RO asserted; the app may be suspended by the error screen |
+| app shows `2168-0002` | the **application** (Seedsow) faulted (`Creport`); system survived; power-button restart |
 | no ping, no `:8080` | the console itself is down; power-cycle |
 | `:8080` accepts TCP but never replies | the launcher's HTTP handler is parked by the `R.serve` loop, or the app is wedged |
 | app will not close | a blocking native call holds the FS; power-cycle |

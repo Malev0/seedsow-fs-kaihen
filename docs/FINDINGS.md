@@ -378,8 +378,11 @@ was blocked. The first post-release read never returned and the console
 The network stack still answered ping, so this is a fatal abort, not a silent
 hang. Delivering the Loader's mount into the FS state we had parked is fatal on
 this build, the same failure seen at 23:59. The error code on that screen is
-the missing diagnostic: `2168-0002` means the application faulted, a
-`2001-xxxx`-style code means a system module did.
+the missing diagnostic. The display is `2000 + module` (switchbrew): `2162-0002`
+is module 162 (`Err`), description 2 = `SystemModuleAborted`; raw `0x4A2` is
+`svcBreak` (Komet-CL). That is a **system module** asserting (FS, Loader, or the
+launched RO), not the app. `2168-0002` is module 168 (`Creport`), i.e. an
+application error.
 
 The 02:58 run used `NS2_LAUNCH_FLAGS=0` (load inside the launch request) and hit
 the same wall: the first poll read timed out, so the load is synchronous with
@@ -418,10 +421,11 @@ fsp-srv session (`postSessions`) and the whole table (`postTableAdded` /
 still stuck". If the first read times out, the shim is still held and the native
 retained-read/write worker is required.
 
-The 23:37 flags-0 run went further: the app faulted during the load
-(`2162-0002`), `waitOnly.up` was false, but `gate.restore()` still succeeded.
-So the app's HTTP/Lua side dies; the FS session survives, but the endpoint is
-blocked (see the 23:50 run below). The post-load dump must therefore run even
+The 23:37 flags-0 run went further: a system module aborted during the load
+(`2162-0002` = Err/SystemModuleAborted; the error screen then suspends the app,
+so its HTTP/Lua side dies), `waitOnly.up` was false, but `gate.restore()` still
+succeeded. The FS session survives, but the endpoint is blocked (see the 23:50
+run below). The post-load dump must therefore run even
 when `up` is false (fixed in `5981391`); `up` is informational, and a dead
 endpoint appears as a read error.
 

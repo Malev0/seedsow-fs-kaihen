@@ -221,5 +221,6 @@ See [[Worker Frames and ROP]].
 **0x10 launch flags** — `StartSuspended`: PM creates the process but the Loader does no FS
 work until a separate start. See [[Launch Flags]].
 
-**2162-0002 / 2168-0002** — application-error screens. The app faulted; the system survived.
-See [[Error Codes]].
+**2162-0002 / 2168-0002** — `2162-0002` is a **system module** abort (`Err`, `0x4A2` =
+`svcBreak`): the FS, Loader, or launched RO asserted. `2168-0002` is an application error
+(`Creport`): Seedsow itself faulted. See [[Error Codes]].
