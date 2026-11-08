@@ -759,6 +759,20 @@ async function main() {
           result: proof.originalTermination.result}));
         check(!proof.originalTermination.result,
           'The original RO process did not terminate: ' + proof.originalTermination.result);
+        // Diagnostic: after the stock is gone, does SM still resolve ro:dmnt?
+        // If it does, the replacement cannot register the name and the probe's
+        // lookup will keep returning the dead stock port.
+        const smClient = state.services.find(x => x.name === 'pm:shell')?.sm;
+        if (smClient) {
+          proof.roDmntAfterKill = await memory.request({command: 'root-native-sm-service',
+            handle: smClient, name: 'ro:dmnt'});
+          await save();
+          console.log(JSON.stringify({stage: 'ro-dmnt-after-kill',
+            transport: proof.roDmntAfterKill.transport, result: proof.roDmntAfterKill.result,
+            moves: proof.roDmntAfterKill.moves}));
+          for (const handle of proof.roDmntAfterKill.moves || [])
+            await memory.request({command: 'root-native-close-handle', handle});
+        }
       }
       // Probe the holder before parking: the FS wait chain links the session
       // object itself, and before parking the session still holds the real wait

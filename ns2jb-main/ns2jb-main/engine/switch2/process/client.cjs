@@ -43,7 +43,9 @@ class Client {
     check(!state.worker || state.worker.joined, 'Another native worker is active');
     const sm = state.services.find(s => s.name === 'pm:shell')?.sm;
     check(sm, 'The borrowed initialized FS SM client is missing');
-    this.record.lookup = await this.worker({kind: 'sm-get', handle: sm, name: 'ro:dmnt'});
+    const service = execution.service || 'ro:dmnt';
+    this.record.service = service;
+    this.record.lookup = await this.worker({kind: 'sm-get', handle: sm, name: service});
     await this.save();
     check(!this.record.lookup.transport && !this.record.lookup.result, 'RO service lookup failed');
     this.handle = this.record.lookup.handle;

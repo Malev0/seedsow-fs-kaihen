@@ -43,11 +43,23 @@ async function main(pid) {
     const handle = smClient;
     check(handle, 'The borrowed FS SM client is missing');
     proof.aliveBefore = await liveness(); await save();
-    proof.lookup = await worker({kind: 'sm-get', handle, name}, 0x180000);
+    // The stock RO's ro:dmnt registration can outlive its process. Try the
+    // payload's dedicated fallback name first; keep ro:dmnt as the second try.
+    const attempts = [];
+    let serviceHandle = 0;
+    for (const [candidate, areaOffset] of [['ro:2', 0x240000], [name, 0x180000]]) {
+      const row = await worker({kind: 'sm-get', handle, name: candidate}, areaOffset);
+      attempts.push({name: candidate, row}); await save();
+      const response = row.responses[0];
+      if (!response.transport && !response.result && response.handle) {
+        serviceHandle = response.handle;
+        proof.name = candidate; proof.handle = serviceHandle; proof.lookup = row;
+        break;
+      }
+    }
+    proof.lookups = attempts;
+    check(serviceHandle, 'The service lookup failed');
     await save();
-    const lookup = proof.lookup.responses[0];
-    check(!lookup.transport && !lookup.result && lookup.handle, 'The service lookup failed');
-    proof.handle = lookup.handle;
     let previousTick = 0n;
     for (let i = 0; i < 2; i++) {
       const nonce = crypto.randomBytes(8);
@@ -73,7 +85,8 @@ async function main(pid) {
     await save();
     proof.closed = await memory.request({command: 'root-native-close-handle', handle: proof.handle});
     await save();
-    return {file, verified: true, pid, challenges: proof.challenges.length, completed: proof.completed};
+    return {file, verified: true, pid, challenges: proof.challenges.length, completed: proof.completed,
+      service: proof.name};
   } catch (error) {
     try { proof.aliveAfter = await liveness(); } catch (failure) { proof.livenessError = failure.message; }
     if (smClient) {

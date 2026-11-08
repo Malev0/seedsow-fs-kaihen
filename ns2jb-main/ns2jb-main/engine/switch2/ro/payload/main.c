@@ -46,6 +46,26 @@ static u32 register_service(u32 sm, u32 space, const char *name, u32 *last_resul
     return p[4] ? 0 : p[3];
 }
 
+// Drop a stale registration left by the stock RO. The stock and this payload
+// share program id 0x0400000000000037, so SM may allow the replacement to
+// release the name the dead process still owns.
+static u32 unregister_service(u32 sm, u32 space, const char *name, u32 *last_result) {
+    u32 *p = message();
+    clear(p);
+    p[0] = 0x13;
+    p[1] = 3;
+    p[2] = space;
+    for (u32 i = 0; name[i] && i < 8; i++) ((u8 *)p)[12 + i] = name[i];
+    u32 transport = send_request(sm);
+    if (transport) { *last_result = transport; return 0; }
+    if (p[0] != 0x13 || p[1] != 0x80000001) {
+        *last_result = 0xffffffff;
+        return 0;
+    }
+    *last_result = p[2];
+    return p[2] ? 0 : 1;
+}
+
 static Reply respond(u32 session, u64 registration_result) {
     u32 *p = message();
     u32 at = 2, handle = 0, valid = p[0] == 4 || p[0] == 0x01000004;
@@ -113,19 +133,26 @@ __attribute__((noreturn)) void main(void) {
     p[2] = 1;
     if (send_request(sm) || p[2]) for (;;) sleep_thread(1000000000);
 
-    u32 ports[2] = {0, 0}, sessions[4] = {0, 0, 0, 0};
-    u32 registration[2] = {0, 0};
+    u32 ports[3] = {0, 0, 0}, sessions[4] = {0, 0, 0, 0};
+    u32 registration[3] = {0, 0, 0};
     for (;;) {
         // Native RO registers ro:1 only in space 1. Space 2 is optional here.
         if (!ports[0]) ports[0] = register_service(sm, 2, "ro:1", &registration[0]);
-        // If stock RO owns this name, retain it until the controller frees it.
-        if (!ports[1]) ports[1] = register_service(sm, 1, "ro:dmnt", &registration[1]);
-        u32 handles[6], kinds[6], count = 0;
-        for (u32 i = 0; i < 2; i++) if (ports[i]) {
+        // If stock RO owns this name, release the stale registration, then
+        // register the replacement. The stock is already terminated.
+        if (!ports[1]) {
+            u32 stale = 0;
+            unregister_service(sm, 1, "ro:dmnt", &stale);
+            ports[1] = register_service(sm, 1, "ro:dmnt", &registration[1]);
+        }
+        // Fallback for the probe: a name the stock RO never owned.
+        if (!ports[2]) ports[2] = register_service(sm, 1, "ro:2", &registration[2]);
+        u32 handles[8], kinds[8], count = 0;
+        for (u32 i = 0; i < 3; i++) if (ports[i]) {
             handles[count] = ports[i]; kinds[count++] = i;
         }
         for (u32 i = 0; i < 4; i++) if (sessions[i]) {
-            handles[count] = sessions[i]; kinds[count++] = 2 + i;
+            handles[count] = sessions[i]; kinds[count++] = 3 + i;
         }
         if (!count) { sleep_thread(50000000); continue; }
         // A receive without a reply target needs a blank receive header.
@@ -135,12 +162,12 @@ __attribute__((noreturn)) void main(void) {
         if (ready.value >= count) continue;
         u32 kind = kinds[ready.value];
         if (ready.result) {
-            if (ready.result == 0xf601 && kind >= 2) {
-                close_handle(sessions[kind - 2]); sessions[kind - 2] = 0;
+            if (ready.result == 0xf601 && kind >= 3) {
+                close_handle(sessions[kind - 3]); sessions[kind - 3] = 0;
             }
             continue;
         }
-        if (kind < 2) {
+        if (kind < 3) {
             Reply accepted = accept_session(ports[kind]);
             if (accepted.result) continue;
             u32 slot = 0;
@@ -148,7 +175,7 @@ __attribute__((noreturn)) void main(void) {
             if (slot < 4) sessions[slot] = accepted.value;
             else close_handle(accepted.value);
         } else {
-            u32 slot = kind - 2;
+            u32 slot = kind - 3;
             if (message()[0] == 2) {
                 close_handle(sessions[slot]); sessions[slot] = 0;
             } else {

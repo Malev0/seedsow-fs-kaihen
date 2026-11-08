@@ -269,7 +269,8 @@ async function dispatch(context, request, state, domain) {
         bytes = packet(0x524f0001, Buffer.from(request.hex, 'hex'));
       } else if (request.kind === 'ro-process') {
         const target = Number(request.processHandle), id = Number(request.id);
-        check(state.services.some(x => x.name === 'ro:dmnt' && x.handle === handle), 'Process probe requires the owned RO service');
+        check(state.services.some(x => (x.name === 'ro:dmnt' || x.name === 'ro:2') && x.handle === handle),
+          'Process probe requires the owned RO service');
         check(s.handles.has(target) || target === 0xffff8001, 'Target process handle is not owned');
         check([0x524f0010, 0x524f0011, 0x524f0012, 0x524f0013, 0x524f0014,
           0x524f0015, 0x524f0016].includes(id), 'Unknown process probe');
