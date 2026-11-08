@@ -1365,8 +1365,7 @@ async function main() {
             // the session. Do NOT use gate.restore(): its verification loop
             // reads FS memory while the FS is serving /main, and that read is
             // what hung the endpoint at 00:32 (op 527, after the event-signal
-            // had already succeeded). unpark()+wake() is the same sequence
-            // serve mode uses and needs no post-wake FS read.
+            // had already succeeded).
             await gate.unpark();
             // Signal only. gate.wake() also clears the event, and that clear is
             // the first console RPC after the FS wakes; it wedged the console's
