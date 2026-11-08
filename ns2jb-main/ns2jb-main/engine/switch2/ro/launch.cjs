@@ -1336,12 +1336,31 @@ async function main() {
           // restores the gate instead of serving the tail. Injection is still
           // used for the swap and this Read, where it is proven.
           if (process.env.NS2_LAUNCH_RESTORE_AFTER_READ === '1' && ref.released) {
+            // Pin the freed Read entry out of the manager free list before the
+            // FS dispatches the Loader's close, exactly as the injected path
+            // does. Otherwise an allocation can take the slot and the close can
+            // release the wrong object. Only touch a slot that is still the
+            // freed one (owner/object zero); a reused slot must not be cleared.
+            const slot = Number(layout.table) + (info.object - 1) * 0x30;
+            const raw = await memory.read(slot, 0x30).catch(() => null);
+            const owner = raw ? ptr(raw, 0x18) : null;
+            const object = raw ? ptr(raw, 0x20) : null;
+            const record = {index: i, id: info.object, slot, owner, object,
+              raw: raw ? raw.toString('hex') : null};
+            (proof.closeSlots ||= []).push(record);
+            console.log(JSON.stringify({stage: 'close-slot', index: i,
+              id: info.object, owner, object}));
+            if (raw && owner === 0 && object === 0) {
+              record.pinned = await unlinkFree(slot).catch(() => false);
+              await save();
+            }
             await gate.restore();
             restoredEarly = true;
             proof.restored = true;
             proof.restoreReason = 'after the NPDM read; close and /main served by the FS loop';
             await save();
-            console.log(JSON.stringify({stage: 'gate-restored-after-read', index: i}));
+            console.log(JSON.stringify({stage: 'gate-restored-after-read', index: i,
+              pinned: !!record.pinned}));
             break;
           }
         }
