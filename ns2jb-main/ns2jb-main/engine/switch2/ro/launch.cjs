@@ -1459,6 +1459,35 @@ async function main() {
           break;
         }
       }
+      // Diagnostic: stop serving as soon as the swap is written and hand the
+      // session back so the FS's own loop serves the NPDM Read, the close and
+      // /main (the upstream break-after-swap flow). This removes the injected
+      // Read, the two read-reference copies and the pin from the launch path.
+      // 03:36/04:17 showed the fault is after the start, not in the load.
+      if (proof.swapped && process.env.NS2_LAUNCH_BREAK_AFTER_SWAP === '1') {
+        proof.breakAfterSwap = {at: new Date().toISOString(), index: i,
+          reason: 'swap written; FS loop serves the NPDM read, close and /main'};
+        await save();
+        console.log(JSON.stringify({stage: 'break-after-swap', index: i}));
+        try {
+          await gate.unpark();
+          const signaled = await memory.request({command: 'root-native-event-signal',
+            handle: gate.event.write});
+          check(!signaled.result, 'Handback event did not signal');
+          proof.handback = {signaled: true, after: 'swap'};
+          restoredEarly = true;
+          proof.restored = true;
+          proof.restoreReason = 'after the swap; close and /main served by the FS loop';
+          console.log(JSON.stringify({stage: 'gate-restored-after-swap', index: i}));
+        } catch (error) {
+          // The FS may already be serving the Loader's next request. Leave the
+          // handback to the finally block's gate.restore(), as on the 04:17 run.
+          proof.handbackError = error.message;
+          await save();
+        }
+        await save();
+        break;
+      }
       await save();
       console.log(JSON.stringify({stage: 'stepped', index: i, kind: info.kind, object: info.object,
         command: info.command, added: added.map(a => a.id), mounts: proof.mounts, swapped: proof.swapped}));
