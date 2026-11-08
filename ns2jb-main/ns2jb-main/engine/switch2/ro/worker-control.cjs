@@ -81,15 +81,20 @@ async function dispatch(context, request, state, domain) {
         state.services.push({name: worker.serviceName, handle, application: true});
         result.responses.push({result: 0, handle, raw: raw.subarray(0, 32).toString('hex')});
       } else if (worker.kind === 'sm-get') {
-        check(raw.readUInt32LE() === 0x11 && raw.readUInt32LE(4) === 0x80000001 &&
-          raw.readUInt32LE(8) === 0x20, 'Unexpected native SM reply');
-        const handle = raw.readUInt32LE(12), status = raw.readUInt32LE(16);
-        const reply = {result: status, handle, raw: raw.subarray(0, 32).toString('hex')};
-        result.responses.push(reply);
-        if (!status) {
-          check(handle > 0, 'SM returned a null session');
-          s.handles.add(handle);
-          state.services.push({name: worker.serviceName, handle, sm: worker.handle});
+        // An SM lookup may legitimately fail (unknown or denied service). Do
+        // not throw here: the probe tries a fallback name next.
+        if (raw.readUInt32LE() !== 0x11 || raw.readUInt32LE(4) !== 0x80000001 ||
+          raw.readUInt32LE(8) !== 0x20) {
+          result.responses.push({result: 0xffffffff, raw: raw.subarray(0, 32).toString('hex')});
+        } else {
+          const handle = raw.readUInt32LE(12), status = raw.readUInt32LE(16);
+          const reply = {result: status, handle, raw: raw.subarray(0, 32).toString('hex')};
+          result.responses.push(reply);
+          if (!status) {
+            check(handle > 0, 'SM returned a null session');
+            s.handles.add(handle);
+            state.services.push({name: worker.serviceName, handle, sm: worker.handle});
+          }
         }
       } else {
         const reply = response(raw);

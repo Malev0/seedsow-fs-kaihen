@@ -764,14 +764,19 @@ async function main() {
         // lookup will keep returning the dead stock port.
         const smClient = state.services.find(x => x.name === 'pm:shell')?.sm;
         if (smClient) {
-          proof.roDmntAfterKill = await memory.request({command: 'root-native-sm-service',
-            handle: smClient, name: 'ro:dmnt'});
-          await save();
-          console.log(JSON.stringify({stage: 'ro-dmnt-after-kill',
-            transport: proof.roDmntAfterKill.transport, result: proof.roDmntAfterKill.result,
-            moves: proof.roDmntAfterKill.moves}));
-          for (const handle of proof.roDmntAfterKill.moves || [])
-            await memory.request({command: 'root-native-close-handle', handle});
+          try {
+            proof.roDmntAfterKill = await memory.request({command: 'root-native-sm-service',
+              handle: smClient, name: 'ro:dmnt'});
+            await save();
+            console.log(JSON.stringify({stage: 'ro-dmnt-after-kill',
+              transport: proof.roDmntAfterKill.transport, result: proof.roDmntAfterKill.result,
+              moves: proof.roDmntAfterKill.moves}));
+            for (const handle of proof.roDmntAfterKill.moves || [])
+              await memory.request({command: 'root-native-close-handle', handle});
+          } catch (error) {
+            proof.roDmntAfterKill = {error: error.message}; await save();
+            console.log(JSON.stringify({stage: 'ro-dmnt-after-kill', error: error.message}));
+          }
         }
       }
       // Probe the holder before parking: the FS wait chain links the session
