@@ -194,7 +194,7 @@ async function dispatch(context, request, state, domain) {
     // caller may place a later worker in another part of the same region.
     const areaOffset = Number(request.areaOffset || 0);
     check(Number.isInteger(areaOffset) && areaOffset >= 0 && areaOffset % 0x1000 === 0 &&
-      areaOffset <= 0x100000, 'Invalid worker area offset');
+      areaOffset + 0x60000 <= 0x300000, 'Invalid worker area offset');
     const area = s.base + 0x2100000 + areaOffset, gate = area, slot = area + 0x10;
     check(area + 0x60000 <= s.base + s.bytes, 'Worker area exceeds the retained allocation');
     await events.initialize(s, gate);

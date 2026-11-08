@@ -273,8 +273,11 @@ async function main() {
       object: code.id, domain: ownerDomain}));
   }
   try {
+    // Put the launch worker in the last worker slot. Its chain is settled
+    // without joining and the thread can stay inside pthread_exit, so area 0
+    // must stay free for the post-launch workers (RO challenges and stage 4).
     proof.worker = await memory.request({command: 'root-native-worker-prepare', kind: 'pm-launch',
-      handle: shell, title: proof.target, flags: proof.flags});
+      handle: shell, title: proof.target, flags: proof.flags, areaOffset: 0x2A0000});
     if (serve) {
       // Park, then hand the session back before the request exists. The wait
       // array is rebuilt on the real handle and the mount requests are served
