@@ -184,6 +184,7 @@ async function main() {
     await save();
   }
   let stopLiveness = null;
+  let restoredEarly = false;
   // The Loader mount is not guaranteed to land in the domain that was bound at
   // boot: a launch can open a new fsp-srv session and ConvertToDomain it. Find
   // sessions of the same class in the session pool, walk any new domain and
@@ -1326,6 +1327,23 @@ async function main() {
           await save();
           console.log(JSON.stringify({stage: 'read-released', index: i, entry: info.object,
             released: closed, failed: [ref.copy, ref.copy2].filter(h => !closed.includes(h))}));
+          // Hand the session back now and let the FS's own loop serve the close
+          // and the /main OpenFile/Read. The close is a no-op on the freed
+          // entry (fs.elf +0x219EA0: owner 0 != caller domain -> null object ->
+          // success), and the FS would process /main inside the same wake
+          // window anyway. Every attempt to inject the close has taken the
+          // console down right after the injection (22:57..00:20); upstream
+          // restores the gate instead of serving the tail. Injection is still
+          // used for the swap and this Read, where it is proven.
+          if (process.env.NS2_LAUNCH_RESTORE_AFTER_READ === '1' && ref.released) {
+            await gate.restore();
+            restoredEarly = true;
+            proof.restored = true;
+            proof.restoreReason = 'after the NPDM read; close and /main served by the FS loop';
+            await save();
+            console.log(JSON.stringify({stage: 'gate-restored-after-read', index: i}));
+            break;
+          }
         }
       }
       const rootId = (root.targetEntry - layout.table) / 0x30 + 1;
@@ -1392,7 +1410,12 @@ async function main() {
     if (stopLiveness) await stopLiveness();
     // A wedged endpoint or a dead console makes restore throw; record it
     // instead of masking the error that ended the stage.
-    if (proof.staleCloses?.length || proof.heldClose) {
+    if (restoredEarly) {
+      // The session was already handed back after the NPDM Read. Do not probe
+      // row.request or restore again: the FS is serving the close and /main.
+      proof.restoreSkipped = 'restored after the NPDM read';
+      await save();
+    } else if (proof.staleCloses?.length || proof.heldClose) {
       // The Loader is blocked on a close whose domain entry we could not
       // restore, or the close serve itself failed. Signalling the parked
       // session would make the FS process that close and fault the console
