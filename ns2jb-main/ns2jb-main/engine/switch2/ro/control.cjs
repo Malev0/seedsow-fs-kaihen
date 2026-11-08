@@ -102,20 +102,6 @@ async function dispatch(context, request) {
     await save();
     return entry;
   }
-  if (command === 'domain-close') {
-    // Release a CopyObject duplicate created by `domain-copy`. Closing the last
-    // duplicate drops the underlying FS object's reference count to zero, so
-    // its destructor runs (and, for a save-data file, the transaction closes).
-    const object = Number(request.object);
-    check(state.inspectionDomain?.handle && s.handles.has(state.inspectionDomain.handle),
-      'Close requires the owned inspection domain');
-    check(Number.isInteger(object) && object > 0 && object <= 0x4000,
-      'Invalid owned domain object');
-    await domain.closeObject(s, state.inspectionDomain, object);
-    state.domainCopies = (state.domainCopies || []).filter(item => item.handle !== object);
-    await save();
-    return {object, closed: true};
-  }
   if (command === 'notifier-open') {
     if (state.notifiers.length) return state;
     const root = report.ownedRoot?.clones[0];

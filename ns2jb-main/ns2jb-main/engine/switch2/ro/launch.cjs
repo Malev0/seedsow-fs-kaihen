@@ -1308,17 +1308,24 @@ async function main() {
           info.input.length === 48) {
         const ref = (proof.readRefs || []).find(item => item.entry === info.object && !item.released);
         if (ref) {
+          // These are *kernel handles* returned as moved handles by CopyObject,
+          // not domain object IDs, so close them with `close-handle` (the same
+          // path copy-loader-root.cjs uses for its reference copies). Passing
+          // them to `domain-close` fails its 1..0x4000 domain-ID check and the
+          // copies leak, leaving the save-data transaction open (00:03 run).
+          const closed = [];
           for (const handle of [ref.copy, ref.copy2]) {
             try {
-              await memory.request({command: 'root-native-domain-close', object: handle});
+              await memory.request({command: 'root-native-close-handle', handle});
+              closed.push(handle);
             } catch (error) {
               (proof.releaseErrors ||= []).push({entry: info.object, handle, error: error.message});
             }
           }
-          ref.released = true;
+          ref.released = closed.length === 2;
           await save();
           console.log(JSON.stringify({stage: 'read-released', index: i, entry: info.object,
-            released: [ref.copy, ref.copy2]}));
+            released: closed, failed: [ref.copy, ref.copy2].filter(h => !closed.includes(h))}));
         }
       }
       const rootId = (root.targetEntry - layout.table) / 0x30 + 1;
