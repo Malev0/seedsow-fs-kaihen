@@ -190,6 +190,28 @@ async function dispatch(context, request) {
     await save();
     return entry;
   }
+  if (command === 'sm-unregister') {
+    const handle = Number(request.handle), name = request.name, space = Number(request.space ?? 1);
+    check(s.handles.has(handle) && typeof name === 'string' && /^[a-z0-9:-]{1,8}$/.test(name) &&
+      Number.isInteger(space) && space >= 0 && space <= 2,
+      'SM unregister requires an owned handle, service name and space');
+    const bytes = Buffer.alloc(256);
+    bytes.writeUInt32LE(0x13); bytes.writeUInt32LE(3, 4);
+    bytes.writeUInt32LE(space, 8); bytes.write(name, 12);
+    await s.write(s.base, bytes);
+    const transport = await s.call('send', s.base, 4096, handle);
+    const entry = {at: new Date().toISOString(), operation: command, handle, name, space, transport};
+    state.calls.push(entry);
+    await save();
+    if (transport) return entry;
+    const raw = await s.readOwned(s.base, 256);
+    entry.raw = raw.subarray(0, 64).toString('hex');
+    // UnregisterService reply is cmd 0x13, one raw word: result at offset 8.
+    entry.result = raw.readUInt32LE(8);
+    entry.canonicalResult = entry.result & 0x3fffff;
+    await save();
+    return entry;
+  }
   if (command === 'close-handle') {
     const handle = Number(request.handle);
     check([...state.events, ...(state.domainCopies || []), ...(state.services || [])].some(item => item.handle === handle),

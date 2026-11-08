@@ -96,6 +96,20 @@ async function main() {
         await memory.request({command: 'root-native-file-capture', handle: code.handle, name});
       const result = await memory.request({command: 'root-native-donor-prepare'});
       check(result.ready && result.files.every(item => item.verified), 'The payload files did not verify');
+      // Free the stock's ro:dmnt name while the stock is still alive. Its own
+      // port handle keeps the object alive, so the unregister only drops SM's
+      // registration; the launch then kills the stock and the payload can
+      // register the name. Do this before the launch: a mid-launch SM call
+      // blocks the retained endpoint (07:00 run).
+      try {
+        result.unregister = await memory.request({command: 'root-native-sm-unregister',
+          handle: sm.export.handle, name: 'ro:dmnt', space: 1});
+        console.log(JSON.stringify({stage: 'ro-dmnt-unregister',
+          transport: result.unregister.transport, result: result.unregister.result}));
+      } catch (error) {
+        result.unregister = {error: error.message};
+        console.log(JSON.stringify({stage: 'ro-dmnt-unregister', error: error.message}));
+      }
       return result;
     });
     await script('ro', 'bind-sessions');
