@@ -63,9 +63,10 @@ else
         local impl = u64(ab, 40)
         P(string.format("entry %d node=%s accessor=%s name=%q impl=%s next=%s",
             i, hx(nextp), hx(accessor), name, hx(impl), hx(u64(ab, 16))))
+        -- Keep walking after "save": the mount list is needed to pick a donor
+        -- backing other than the app's live save (the checkpoint's suggestion).
         if name == "save" then
             found = { accessor = accessor, impl = impl, bytes = ab }
-            break
         end
         nextp = u64(ab, 16)
     end

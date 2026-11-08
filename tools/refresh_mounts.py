@@ -34,6 +34,12 @@ def post(path):
 
 out = post(ACCESSOR)
 print(out)
+# Keep the full walk: it lists every mount name, so a donor backing other than
+# the app's live save (e.g. tmp/game/empty) can be chosen later.
+try:
+    (ROOT / 'tools' / 'mounts.log').write_text(out, encoding='utf-8')
+except OSError:
+    pass
 sdk = re.search(r'sdk=(0x[0-9a-fA-F]+)', out)
 entry = re.search(r'accessor=(0x[0-9a-fA-F]+).*?impl=(0x[0-9a-fA-F]+)', out)
 service = re.search(r'^impl=0x[0-9a-fA-F]+ service=(0x[0-9a-fA-F]+)', out, re.M)

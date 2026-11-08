@@ -379,6 +379,20 @@ async function dispatch(context, request, state, domain) {
       // result survives even if the launched process faults.
       calls.push({function: live.sdk + SOCK.send,
         args: [{result: dumpSocket}, area + 0x1000, 0x100, 0]});
+      // Then, after ~400 ms, ask pm:dmnt cmd 7 (GetProgramIdDebug) for the pid
+      // the start just launched and dump that reply too. A live process answers
+      // 0x0400000000000037; a faulted one answers an error. This separates
+      // "the launched process crashed" from "the FS/app asserted after the
+      // start" without needing the fatal screen (which shows no Program field).
+      const pid = Number(request.pid);
+      const query = Buffer.alloc(8); query.writeBigUInt64LE(BigInt(pid));
+      await s.write(area + 0x2000, packet(7, query));
+      calls.push({function: live.sdk + 0x168b54,
+        args: [Math.round(400e6 * 19200000 / 31250000), 0, 0, 0]});
+      calls.push({function: live.sdk + require("../../shared/sdk-functions.json").send.offset,
+        args: [area + 0x2000, 4096, handle, 0]});
+      calls.push({function: live.sdk + SOCK.send,
+        args: [{result: dumpSocket}, area + 0x2000, 0x100, 0]});
     }
     const worker = await native.start(s, area + 0x20000, 0x40000, slot, calls,
       'ro-' + request.kind + '-' + Date.now(), 0,
