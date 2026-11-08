@@ -117,6 +117,13 @@ async function main() {
     // launch is still valid: 03:16 returned result 0 and pid 208 this way.
     check(launch.imageAccepted && launch.pid && (launch.restored || launch.restoreSkipped),
       'PM did not accept the payload');
+    // Diagnostic runs (the idle-payload control) must stop before activate:
+    // activate kills the original RO, which would confound the next run.
+    if (process.env.NS2_STOP_AFTER_LAUNCH === '1') {
+      console.log(JSON.stringify({stage: 'stop-after-launch', file: launch.file,
+        pid: launch.pid, settled: launch.settled, completion: launch.completion}));
+      return;
+    }
     const activation = await stage('Start RO payload', () => runtime.activate(launch.file));
     const proof = await stage('RO instruction challenges', () => runtime.probe(activation.pid));
     const handoff = await stage('Restore Loader session', () => runtime.handoff());
