@@ -1450,11 +1450,29 @@ async function main() {
       const postMs = Number(process.env.NS2_LAUNCH_POST_MS ?? 8000);
       const host = consoleHost();
       proof.postHandback = [];
+      let consoleRpcUp = true;
       for (let waited = 0; waited < postMs; waited += 1000) {
         await new Promise(resolve => setTimeout(resolve, 1000));
         const up = await tcpUp(host, 8080);
-        proof.postHandback.push({at: new Date().toISOString(), up});
-        console.log(JSON.stringify({stage: 'post-handback-liveness', waited: waited + 1000, up}));
+        const sample = {at: new Date().toISOString(), up};
+        // Poll the slot-2 pm:dmnt start's result cells with a short deadline.
+        // This is the first console RPC after the handback signal and it tells
+        // us both whether the serve loop is still alive and whether the start
+        // returned (values leave the sentinel).
+        if (consoleRpcUp) {
+          try {
+            const values = await memory.request({command: 'root-native-worker-values',
+              slot: 2, timeoutMs: Number(process.env.NS2_LAUNCH_POLL_TIMEOUT_MS ?? 1500)});
+            sample.workerValues = values.values;
+            sample.sentinel = values.sentinel;
+            sample.started = values.values.some(value => value !== values.sentinel);
+          } catch (error) {
+            consoleRpcUp = false;
+            sample.rpcError = error.message;
+          }
+        }
+        proof.postHandback.push(sample);
+        console.log(JSON.stringify({stage: 'post-handback-liveness', waited: waited + 1000, ...sample}));
         await save();
         if (!up) break;
       }

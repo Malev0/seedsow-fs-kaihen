@@ -138,7 +138,10 @@ async function connect(reportFile) {
     // expected transfer time without changing ordinary request deadlines.
     // NS2_MEMORY_TIMEOUT_MS shortens ordinary requests so a dead console fails
     // fast instead of holding a stage for a full minute.
-    const timeoutMs = command.command === 'root-native-file-capture' ? 15 * 60 * 1000
+    // A caller may pass `timeoutMs` for a probe that must fail fast (the launch
+    // post-handback worker poll). It is ignored by the controller.
+    const timeoutMs = Number(command.timeoutMs) > 0 ? Number(command.timeoutMs)
+      : command.command === 'root-native-file-capture' ? 15 * 60 * 1000
       : Number(process.env.NS2_MEMORY_TIMEOUT_MS) || 60000;
     const result = queue.then(() => requestOnce(socketPath, command, timeoutMs));
     queue = result.catch(() => {});
