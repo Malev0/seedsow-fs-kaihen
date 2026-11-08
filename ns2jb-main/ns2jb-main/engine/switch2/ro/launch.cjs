@@ -155,6 +155,13 @@ async function main() {
   await save();
   console.log(JSON.stringify({stage: 'launch-prepared', file, wantedMount, flags,
     otherRow: otherRow ? otherRow.address : null}));
+  // Confirm the env actually reached this child; a missing liveness probe in
+  // the 00:46 proof showed the override did not apply.
+  console.log(JSON.stringify({stage: 'launch-env',
+    restoreAfterRead: process.env.NS2_LAUNCH_RESTORE_AFTER_READ ?? null,
+    livenessMs: process.env.NS2_LAUNCH_LIVENESS_MS ?? null,
+    postMs: process.env.NS2_LAUNCH_POST_MS ?? null,
+    mode: process.env.NS2_LAUNCH_MODE ?? null}));
   // Pay for the borrowed donor reference. The swap later points the Loader's
   // save-FS entry at the donor object without incrementing its refcount. When
   // the Loader's file is destroyed it releases its parent filesystem, so the
@@ -405,7 +412,7 @@ async function main() {
         await save();
       }
       stopLiveness = startLiveness(proof, save,
-        Number(process.env.NS2_LAUNCH_LIVENESS_MS || 0));
+        Number(process.env.NS2_LAUNCH_LIVENESS_MS ?? 180000));
       await memory.request({command: 'root-native-worker-release'});
       if (process.env.NS2_LAUNCH_WAIT_ONLY === '1') {
         // Diagnostic for flags 0: the load is synchronous with the launch send,
@@ -1361,7 +1368,15 @@ async function main() {
             // had already succeeded). unpark()+wake() is the same sequence
             // serve mode uses and needs no post-wake FS read.
             await gate.unpark();
-            proof.handback = {woken: await gate.wake(), wakeFailed: !!gate.wakeFailed};
+            // Signal only. gate.wake() also clears the event, and that clear is
+            // the first console RPC after the FS wakes; it wedged the console's
+            // single-threaded serve loop at 00:46 (bridge: call offset 0x168bb4
+            // timed out). Leave the event signalled and issue no further console
+            // RPC here: the host samples the app over TCP before the settle.
+            const signaled = await memory.request({command: 'root-native-event-signal',
+              handle: gate.event.write});
+            check(!signaled.result, 'Handback event did not signal');
+            proof.handback = {signaled: true};
             restoredEarly = true;
             proof.restored = true;
             proof.restoreReason = 'after the NPDM read; close and /main served by the FS loop';
@@ -1426,6 +1441,24 @@ async function main() {
       await save();
       console.log(JSON.stringify({stage: 'stepped', index: i, kind: info.kind, object: info.object,
         command: info.command, added: added.map(a => a.id), mounts: proof.mounts, swapped: proof.swapped}));
+    }
+    // After an early handback the FS serves the close and /main while the host
+    // is idle. Sample the app over TCP only (no console RPC) so a dead app is
+    // distinguishable from a wedged FS/endpoint. Do this before the settle,
+    // which is the next console RPC.
+    if (restoredEarly && stopLiveness) { await stopLiveness(); stopLiveness = null; }
+    if (restoredEarly) {
+      const postMs = Number(process.env.NS2_LAUNCH_POST_MS ?? 8000);
+      const host = consoleHost();
+      proof.postHandback = [];
+      for (let waited = 0; waited < postMs; waited += 1000) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const up = await tcpUp(host, 8080);
+        proof.postHandback.push({at: new Date().toISOString(), up});
+        console.log(JSON.stringify({stage: 'post-handback-liveness', waited: waited + 1000, up}));
+        await save();
+        if (!up) break;
+      }
     }
     }
   } catch (error) {
