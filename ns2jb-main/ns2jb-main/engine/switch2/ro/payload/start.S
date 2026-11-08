@@ -9,6 +9,7 @@ _start:
 .global connect_port
 connect_port:
     mov x1, x0
+    mrs x0, tpidrro_el0
     svc #0x1f
     mov w0, w0
     mov w1, w1
@@ -47,6 +48,7 @@ reply_receive:
 .global accept_session
 accept_session:
     mov w1, w0
+    mrs x0, tpidrro_el0
     svc #0x41
     mov w0, w0
     mov w1, w1
@@ -54,14 +56,18 @@ accept_session:
 .global process_id
 process_id:
     mov w1, w0
+    mrs x0, tpidrro_el0
     svc #0x24
     mov w0, w0
+    mov w1, w1
     ret
 .global thread_id
 thread_id:
     mov w1, w0
+    mrs x0, tpidrro_el0
     svc #0x25
     mov w0, w0
+    mov w1, w1
     ret
 .global system_tick
 system_tick:
@@ -73,8 +79,10 @@ get_info:
     mov x3, x2
     mov w2, w1
     mov w1, w0
+    mrs x0, tpidrro_el0
     svc #0x29
     mov w0, w0
+    mov w1, w1
     ret
 .global query_process
 query_process:

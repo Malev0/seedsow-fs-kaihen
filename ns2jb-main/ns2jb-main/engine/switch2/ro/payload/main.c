@@ -93,7 +93,10 @@ static Reply respond(u32 session, u64 registration_result) {
     p[10] = result;
     u64 *out = (u64 *)(p + 12);
     for (u32 i = 0; i < (output_bytes + 7) / 8; i++) out[i] = output[i];
-    return reply_receive((const u32 *)0, 0, session, 0);
+    // The reply path also carries the signaled-handle index through x0 on this
+    // build. Pass a real slot instead of NULL so the kernel cannot fault here.
+    u32 index = 0;
+    return reply_receive(&index, 0, session, 0);
 }
 
 __attribute__((noreturn)) void main(void) {
