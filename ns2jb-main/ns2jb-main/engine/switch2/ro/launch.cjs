@@ -1361,7 +1361,7 @@ async function main() {
             // had already succeeded). unpark()+wake() is the same sequence
             // serve mode uses and needs no post-wake FS read.
             await gate.unpark();
-            await gate.wake();
+            proof.handback = {woken: await gate.wake(), wakeFailed: !!gate.wakeFailed};
             restoredEarly = true;
             proof.restored = true;
             proof.restoreReason = 'after the NPDM read; close and /main served by the FS loop';
