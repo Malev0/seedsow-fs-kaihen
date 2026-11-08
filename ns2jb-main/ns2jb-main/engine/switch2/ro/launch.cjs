@@ -144,7 +144,12 @@ async function main() {
   const shell = state.services.find(x => x.name === 'pm:shell').handle;
   const row = bound.rows.find(r => r.domain === root.targetDomain);
   const otherRow = bound.rows.find(r => r.address !== row.address) || null;
-  const donor = types.rows.find(r => r.name === 'donor');
+  // NS2_LAUNCH_SWAP=code swaps the Loader's mount with the app's already-open
+  // CodeFS (the real ro image, read-only) instead of the writable save clone.
+  // This is the clean payload control: no large write into the app's live save.
+  const swapName = process.env.NS2_LAUNCH_SWAP === 'code' ? 'code' : 'donor';
+  const donor = types.rows.find(r => r.name === swapName);
+  check(donor, 'The selected swap source is missing from the filesystem types');
   const server = await exportHandle(memory, row.receive, 'Loader server readiness');
   const gate = new Gate(memory, row, state.apiWorkers, bound.waiters, server.handle, event);
   const proof = {session: memory.info.session, report: memory.reportFile, target,
