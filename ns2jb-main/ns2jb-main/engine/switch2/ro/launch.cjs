@@ -736,6 +736,27 @@ async function main() {
         await new Promise(resolve => setTimeout(resolve, 25));
       }
       check(pid, 'The suspended launch returned no pid');
+      // Control: terminate the stock RO before starting the replacement. With
+      // NS2_LAUNCH_SWAP=code the replacement is the real RO image, which
+      // otherwise asserts on duplicate ro:1/ro:dmnt registration (02:03).
+      // Killing it first also isolates a save-data donor fault from a
+      // duplicate-program fault.
+      if (process.env.NS2_LAUNCH_KILL_ORIGINAL === '1') {
+        const sm = await read('-sm-proof.json');
+        check(sm.report === memory.reportFile && sm.program && !sm.program.result,
+          'The original RO identity is stale');
+        const originalPid = Buffer.from(sm.program.hex, 'hex').readBigUInt64LE().toString();
+        check(BigInt(originalPid) > 1n && originalPid !== pid,
+          'The original and replacement RO PIDs must be distinct');
+        proof.originalPid = originalPid;
+        proof.originalTermination = await memory.request({command: 'root-native-ipc',
+          handle: shell, id: 1, hex: encodeU64(BigInt(originalPid)).toString('hex')});
+        await save();
+        console.log(JSON.stringify({stage: 'original-ro-terminated', pid: originalPid,
+          result: proof.originalTermination.result}));
+        check(!proof.originalTermination.result,
+          'The original RO process did not terminate: ' + proof.originalTermination.result);
+      }
       // Probe the holder before parking: the FS wait chain links the session
       // object itself, and before parking the session still holds the real wait
       // handle. Refuse to inject if the object or handle differs.
