@@ -121,7 +121,8 @@ async function main() {
     const proof = await stage('RO instruction challenges', () => runtime.probe(activation.pid));
     const handoff = await stage('Restore Loader session', () => runtime.handoff());
     const payload = donor.files.find(item => item.name === 'main');
-    check(payload.sha256 === hash(await fs.readFile(path.join(__dirname, 'ro/payload/main'))), 'Payload changed during launch');
+    if (process.env.NS2_DONOR_MAIN !== 'real')
+      check(payload.sha256 === hash(await fs.readFile(path.join(__dirname, 'ro/payload/main'))), 'Payload changed during launch');
     await save(runtime.executionFile, {verified: true, session: a.session, report: acquisition.report,
       pid: proof.pid, programId: '0400000000000037', payloadSha256: payload.sha256,
       proof: proof.file, launch: launch.file, identity: activation.file, handoff: handoff.file});

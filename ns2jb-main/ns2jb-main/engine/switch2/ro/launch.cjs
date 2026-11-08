@@ -1545,9 +1545,14 @@ async function main() {
         // the Loader, so wait for it too: this is what proves the FS served the
         // tail (/main) and the launch actually completed.
         const until = Date.now() + (slot === 1 ? 10000 : (restoredEarly ? 20000 : 0));
+        const settleTimeout = Number(process.env.NS2_LAUNCH_SETTLE_TIMEOUT_MS) ||
+          (restoredEarly ? 4000 : 0);
         for (;;) {
-          try { proof.settled[slot] = await memory.request({command: 'root-native-worker-settle', slot}); break; }
-          catch (error) {
+          try {
+            proof.settled[slot] = await memory.request({command: 'root-native-worker-settle', slot,
+              ...(settleTimeout ? {timeoutMs: settleTimeout} : {})});
+            break;
+          } catch (error) {
             (proof.settleErrors ||= {})[slot] = error.message;
             if (Date.now() >= until) break;
             await new Promise(resolve => setTimeout(resolve, 250));
@@ -1557,6 +1562,9 @@ async function main() {
       // Slot 1 is the pm-launch reply that carries the new pid; slot 2 is the
       // deferred pm:dmnt start result. Prefer slot 1 so the pid is recorded.
       proof.completion = proof.settled[1] || proof.settled[2];
+      // Persist the settle outcome: the previous runs lost it because the
+      // completion check threw before the proof was saved.
+      await save();
     } else {
       const until = Date.now() + 20000;
       while (!(await memory.request({command: 'root-native-worker-state'})).finished) {

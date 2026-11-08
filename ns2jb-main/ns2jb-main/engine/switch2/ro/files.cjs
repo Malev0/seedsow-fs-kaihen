@@ -78,10 +78,17 @@ async function dispatch(context, request, state, domain) {
   }
   if (command === 'donor-prepare') {
     const manifest = require('./payload/manifest.json');
-    const main = await fs.readFile(path.join(__dirname, 'payload/main'));
+    // Control experiment: NS2_DONOR_MAIN=real uses the console's real ro main
+    // (FW dump) instead of our proof payload, to separate launch-path failures
+    // from payload failures. The real image is much larger (120415 B).
+    const realMain = process.env.NS2_DONOR_MAIN === 'real';
+    const mainFile = realMain
+      ? path.join(__dirname, '../../../../../FW dump Switch2 JPN/0400000000000037/main')
+      : path.join(__dirname, 'payload/main');
+    const main = await fs.readFile(mainFile);
     const policy = await fs.readFile(path.join(__dirname, live.session + '-code-0400000000000037/main.npdm'));
     check(manifest.platform === live.platform && manifest.programId === '0400000000000037' &&
-      main.length === manifest.payloadBytes && hash(main) === manifest.payloadSha256 &&
+      (realMain || (main.length === manifest.payloadBytes && hash(main) === manifest.payloadSha256)) &&
       hash(policy) === manifest.policySha256, 'The payload or this console\'s RO policy is unsupported');
     check(!s.threads.size, 'Prepare the donor before launching a worker');
     if (state.donor?.ready) return state.donor;
@@ -105,17 +112,17 @@ async function dispatch(context, request, state, domain) {
         const reply = await pathCall(name, 7);
         if (!reply.result && ['main', 'main.npdm'].includes(name)) {
           check(reply.data.readUInt32LE() === 1, 'Existing donor path is not a file');
-          const file = name === 'main' ? path.join(__dirname, 'payload/main') :
+          const file = name === 'main' ? mainFile :
             path.join(__dirname, live.session + '-code-0400000000000037/main.npdm');
           const expected = await fs.readFile(file), mode = Buffer.alloc(4); mode.writeUInt32LE(1);
-          check(expected.length > 0 && expected.length <= 0x10000, 'Existing donor comparison exceeds its buffer');
+          check(expected.length > 0 && expected.length <= 0x100000, 'Existing donor comparison exceeds its buffer');
           const child = domain.oneHandle(await pathCall(name, 8, mode));
           let stale;
           try {
             const size = await s.ipc('Existing donor file size', child, 4);
             check(!size.result, 'Existing donor size query failed');
             const length = Number(size.data.readBigUInt64LE());
-            check(length > 0 && length <= 0x10000, 'Existing donor exceeds its comparison buffer');
+            check(length > 0 && length <= 0x100000, 'Existing donor exceeds its comparison buffer');
             const args = Buffer.alloc(24); args.writeBigUInt64LE(BigInt(length), 16);
             const read = await s.ipc('Existing donor verification', child, 0, args,
               {receive: [{address: s.base + 0x4000, size: length, mode: 1}]});
@@ -148,7 +155,7 @@ async function dispatch(context, request, state, domain) {
       await save();
     }
     for (const name of ['main.npdm', 'main']) {
-      const file = name === 'main' ? path.join(__dirname, 'payload/main') :
+      const file = name === 'main' ? mainFile :
         path.join(__dirname, live.session + '-code-0400000000000037/main.npdm');
       const bytes = await fs.readFile(file), digest = hash(bytes);
       check(bytes.length > 0 && bytes.length <= 0x100000, 'Unexpected donor file size');
