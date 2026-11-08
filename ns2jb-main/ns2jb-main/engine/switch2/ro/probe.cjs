@@ -33,13 +33,14 @@ async function main(pid) {
     }
   }
   const monitor = state.services.find(s => s.name === 'pm:dmnt')?.handle;
+  const smClient = state.services.find(s => s.name === 'pm:shell')?.sm;
   const liveness = async () => {
     if (!monitor) return {error: 'The owned PM monitor is missing'};
     const bytes = Buffer.alloc(8); bytes.writeBigUInt64LE(BigInt(pid));
     return memory.request({command: 'root-native-ipc', handle: monitor, id: 7, hex: bytes.toString('hex')});
   };
   try {
-    const handle = state.services.find(s => s.name === 'pm:shell')?.sm;
+    const handle = smClient;
     check(handle, 'The borrowed FS SM client is missing');
     proof.aliveBefore = await liveness(); await save();
     proof.lookup = await worker({kind: 'sm-get', handle, name}, 0x180000);
@@ -75,6 +76,11 @@ async function main(pid) {
     return {file, verified: true, pid, challenges: proof.challenges.length, completed: proof.completed};
   } catch (error) {
     try { proof.aliveAfter = await liveness(); } catch (failure) { proof.livenessError = failure.message; }
+    if (smClient) {
+      try {
+        proof.lookupAfter = await memory.request({command: 'root-native-sm-service', handle: smClient, name});
+      } catch (failure) { proof.lookupAfterError = failure.message; }
+    }
     proof.error = error.stack; await save();
     error.proofFile = file;
     throw error;
