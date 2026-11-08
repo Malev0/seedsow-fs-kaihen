@@ -42,6 +42,26 @@ local function safe_read(addr, n)
 end
 local function cstr16(s) return (s:gsub("%z.*$", "")) end
 
+-- Resolve one mount's IFileSystem service so refresh_mounts.py can record every
+-- mount, not just save. The donor-prepare stage needs the tmp mount's accessor,
+-- implementation and service to clone it as the RO payload backing.
+local function describe(name, accessor, impl)
+    local ib = safe_read(impl, 0x60)
+    if not ib then P("mount-unreadable name=" .. name) return end
+    local service = u64(ib, 16)
+    local sb = safe_read(service, 0x80)
+    if not sb then P("mount-unreadable name=" .. name) return end
+    local svt, manager, objectId = u64(sb, 0), u64(sb, 16), u32(sb, 24)
+    local borrowed = 0
+    local mb = safe_read(manager, 0x80)
+    if mb then
+        local sb4 = safe_read(u64(mb, 16), 4)
+        if sb4 then borrowed = u32(sb4, 0) end
+    end
+    P(string.format("mount name=%s accessor=%s impl=%s service=%s vtable=%s manager=%s objectId=%d borrowed=%d",
+        name, hx(accessor), hx(impl), hx(service), hx(svt), hx(manager), objectId, borrowed))
+end
+
 P("start")
 P(string.format("sdk=%s head=%s", hx(SDK), hx(HEAD)))
 local hb = safe_read(HEAD, 0x20)
@@ -63,6 +83,7 @@ else
         local impl = u64(ab, 40)
         P(string.format("entry %d node=%s accessor=%s name=%q impl=%s next=%s",
             i, hx(nextp), hx(accessor), name, hx(impl), hx(u64(ab, 16))))
+        describe(name, accessor, impl)
         -- Keep walking after "save": the mount list is needed to pick a donor
         -- backing other than the app's live save (the checkpoint's suggestion).
         if name == "save" then

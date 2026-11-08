@@ -41,21 +41,42 @@ try:
 except OSError:
     pass
 sdk = re.search(r'sdk=(0x[0-9a-fA-F]+)', out)
-entry = re.search(r'accessor=(0x[0-9a-fA-F]+).*?impl=(0x[0-9a-fA-F]+)', out)
-service = re.search(r'^impl=0x[0-9a-fA-F]+ service=(0x[0-9a-fA-F]+)', out, re.M)
-vtable = re.search(r'service vtable=(0x[0-9a-fA-F]+)', out)
-if not (entry and service and vtable and sdk):
-    raise SystemExit('could not parse sdk/accessor/service/vtable')
-data = {
-    'session': 'seedsow',
-    'sdk': int(sdk.group(1), 16),
-    'mounts': [{
+if not sdk:
+    raise SystemExit('could not parse sdk')
+# The accessor prints one `mount ...` line per mount (save, tmp, game, ...).
+# Keep every mount that resolved a service: donor-prepare can then clone a
+# backing other than the app's live save (NS2_DONOR_MOUNT=tmp).
+mounts = []
+pattern = re.compile(
+    r'^mount name=(\S+) accessor=(0x[0-9a-fA-F]+) impl=(0x[0-9a-fA-F]+) '
+    r'service=(0x[0-9a-fA-F]+) vtable=(0x[0-9a-fA-F]+) '
+    r'manager=(0x[0-9a-fA-F]+) objectId=(\d+) borrowed=(\d+)$', re.M)
+for match in pattern.finditer(out):
+    mounts.append({
+        'name': match.group(1),
+        'accessor': int(match.group(2), 16),
+        'implementation': int(match.group(3), 16),
+        'service': int(match.group(4), 16),
+        'serviceVtable': int(match.group(5), 16),
+    })
+if not mounts:
+    # Older accessor output: only the save mount was resolved.
+    entry = re.search(r'accessor=(0x[0-9a-fA-F]+).*?impl=(0x[0-9a-fA-F]+)', out)
+    service = re.search(r'^impl=0x[0-9a-fA-F]+ service=(0x[0-9a-fA-F]+)', out, re.M)
+    vtable = re.search(r'service vtable=(0x[0-9a-fA-F]+)', out)
+    if not (entry and service and vtable):
+        raise SystemExit('could not parse accessor/service/vtable')
+    mounts = [{
         'name': 'save',
         'accessor': int(entry.group(1), 16),
         'implementation': int(entry.group(2), 16),
         'service': int(service.group(1), 16),
         'serviceVtable': int(vtable.group(1), 16),
-    }],
+    }]
+data = {
+    'session': 'seedsow',
+    'sdk': int(sdk.group(1), 16),
+    'mounts': mounts,
 }
 paths = glob.glob(str(ROOT / '**' / 'engine' / 'switch2' / 'app' / 'mounts.json'), recursive=True)
 if not paths:

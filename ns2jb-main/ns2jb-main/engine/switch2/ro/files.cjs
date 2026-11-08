@@ -91,13 +91,25 @@ async function dispatch(context, request, state, domain) {
       (realMain || (main.length === manifest.payloadBytes && hash(main) === manifest.payloadSha256)) &&
       hash(policy) === manifest.policySha256, 'The payload or this console\'s RO policy is unsupported');
     check(!s.threads.size, 'Prepare the donor before launching a worker');
-    if (state.donor?.ready) return state.donor;
     const directory = path.join(__dirname, '../app');
-    if (!state.donor) {
-      const handle = await require(path.join(directory, 'mounted-save.cjs')).cloneMountedFilesystem(s, 'save');
-      state.donor = {handle, mount: 'save', files: [], checkedAbsent: [], created: new Date().toISOString()};
-      await save();
+    // The donor is a clone of an application-mounted filesystem. Cloning the
+    // live save means the Loader's /main OpenFile/Read/close runs on the same
+    // save-data filesystem the demo is using, which correlates with the FS
+    // assert after the handback. NS2_DONOR_MOUNT=tmp uses the app's separate
+    // cache/temporary mount instead (the mount walk now records every mount).
+    const donorMount = process.env.NS2_DONOR_MOUNT || 'save';
+    check(['save', 'tmp'].includes(donorMount), 'Unsupported donor mount: ' + donorMount);
+    if (state.donor?.ready) {
+      check(state.donor.mount === donorMount,
+        'The donor was already prepared from ' + state.donor.mount + '; reboot before changing NS2_DONOR_MOUNT');
+      return state.donor;
     }
+    if (!state.donor) {
+      const handle = await require(path.join(directory, 'mounted-save.cjs')).cloneMountedFilesystem(s, donorMount);
+      state.donor = {handle, mount: donorMount, files: [], checkedAbsent: [], created: new Date().toISOString()};
+      await save();
+    } else check(state.donor.mount === donorMount,
+      'The donor was already prepared from ' + state.donor.mount + '; reboot before changing NS2_DONOR_MOUNT');
     const donor = state.donor;
     check(s.handles.has(donor.handle) && !donor.root, 'Donor session is unavailable or already converted');
     const pathCall = async (name, id, input = Buffer.alloc(0)) => {

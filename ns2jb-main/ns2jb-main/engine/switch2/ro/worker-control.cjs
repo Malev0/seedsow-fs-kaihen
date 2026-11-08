@@ -387,8 +387,14 @@ async function dispatch(context, request, state, domain) {
       const pid = Number(request.pid);
       const query = Buffer.alloc(8); query.writeBigUInt64LE(BigInt(pid));
       await s.write(area + 0x2000, packet(7, query));
+      // Query as soon as the start reply is out. The 400 ms delay lost the
+      // query in the 02:34 run (the app was suspended first); the process
+      // already exists when the start returns, so a short delay is enough.
+      const queryDelayMs = Number(request.queryDelayMs ?? 50);
+      check(Number.isFinite(queryDelayMs) && queryDelayMs >= 0 && queryDelayMs <= 5000,
+        'Invalid pm-start query delay');
       calls.push({function: live.sdk + 0x168b54,
-        args: [Math.round(400e6 * 19200000 / 31250000), 0, 0, 0]});
+        args: [Math.round(queryDelayMs * 1e6 * 19200000 / 31250000), 0, 0, 0]});
       calls.push({function: live.sdk + require("../../shared/sdk-functions.json").send.offset,
         args: [area + 0x2000, 4096, handle, 0]});
       calls.push({function: live.sdk + SOCK.send,

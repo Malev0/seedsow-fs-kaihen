@@ -755,6 +755,7 @@ async function main() {
       proof.startDump = dumpStart ? {host: dumpHost(), port: Number(process.env.NS2_DUMP_PORT || 39401)} : null;
       proof.startWorker = await memory.request({command: 'root-native-worker-prepare', slot: 2,
         areaOffset: 0x100000, kind: dumpStart ? 'pm-start-dump' : 'pm-start', handle: monitor, pid: Number(pid),
+        queryDelayMs: Number(process.env.NS2_LAUNCH_QUERY_DELAY_MS ?? 50),
         pcAddress: dumpStart ? proof.startDump.host : undefined,
         port: dumpStart ? proof.startDump.port : undefined});
       proof.startRelease = await memory.request({command: 'root-native-worker-release', slot: 2});
@@ -1370,7 +1371,16 @@ async function main() {
             console.log(JSON.stringify({stage: 'close-slot', index: i,
               id: info.object, owner, object}));
             if (raw && owner === 0 && object === 0) {
-              record.pinned = await unlinkFree(slot).catch(() => false);
+              // The pin mutates the manager free list without the FS lock.
+              // The FS serves the close immediately after this handback, so
+              // the slot-reuse window is one Loader round trip; on the 02:34
+              // run the walk itself timed out and the FS still asserted. Keep
+              // it as an opt-out experiment (NS2_LAUNCH_HANDBACK_PIN=0).
+              if (process.env.NS2_LAUNCH_HANDBACK_PIN === '0') {
+                record.pinSkipped = true;
+              } else {
+                record.pinned = await unlinkFree(slot).catch(() => false);
+              }
               await save();
             }
             // Fire-and-forget handback: put the real wait handle back and wake
@@ -1393,7 +1403,7 @@ async function main() {
             proof.restoreReason = 'after the NPDM read; close and /main served by the FS loop';
             await save();
             console.log(JSON.stringify({stage: 'gate-restored-after-read', index: i,
-              pinned: !!record.pinned}));
+              pinned: !!record.pinned, pinSkipped: !!record.pinSkipped}));
             break;
           }
         }
