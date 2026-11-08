@@ -1354,7 +1354,14 @@ async function main() {
               record.pinned = await unlinkFree(slot).catch(() => false);
               await save();
             }
-            await gate.restore();
+            // Fire-and-forget handback: put the real wait handle back and wake
+            // the session. Do NOT use gate.restore(): its verification loop
+            // reads FS memory while the FS is serving /main, and that read is
+            // what hung the endpoint at 00:32 (op 527, after the event-signal
+            // had already succeeded). unpark()+wake() is the same sequence
+            // serve mode uses and needs no post-wake FS read.
+            await gate.unpark();
+            await gate.wake();
             restoredEarly = true;
             proof.restored = true;
             proof.restoreReason = 'after the NPDM read; close and /main served by the FS loop';
@@ -1477,7 +1484,10 @@ async function main() {
       for (const slot of [1, 2]) {
         // Slot 1 carries the pid and can still be storing its result when the
         // loop breaks on slot 2, so give it a few seconds before giving up.
-        const until = Date.now() + (slot === 1 ? 10000 : 0);
+        // After an early handback the slot-2 pm:dmnt start is still blocked in
+        // the Loader, so wait for it too: this is what proves the FS served the
+        // tail (/main) and the launch actually completed.
+        const until = Date.now() + (slot === 1 ? 10000 : (restoredEarly ? 20000 : 0));
         for (;;) {
           try { proof.settled[slot] = await memory.request({command: 'root-native-worker-settle', slot}); break; }
           catch (error) {
