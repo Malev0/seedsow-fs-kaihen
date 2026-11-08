@@ -37,10 +37,6 @@ wait_handles:
     ret
 .global reply_receive
 reply_receive:
-    mov x4, x3
-    mov x3, x2
-    mov x2, x1
-    mov x1, x0
     svc #0x43
     mov w0, w0
     mov w1, w1

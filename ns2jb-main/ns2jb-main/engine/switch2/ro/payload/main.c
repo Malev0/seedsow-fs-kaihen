@@ -10,7 +10,10 @@ extern u32 send_request(u32 handle);
 extern u32 close_handle(u32 handle);
 extern void sleep_thread(s64 ns);
 extern Reply wait_handles(const u32 *handles, u32 count, s64 timeout);
-extern Reply reply_receive(const u32 *handles, u32 count, u32 reply, s64 timeout);
+// The kernel takes (out, handles, count, replyTarget, timeout) and returns the
+// signaled index in x1. Keep the out slot and the handles array separate: the
+// reply path needs out != NULL and handles == NULL with count 0.
+extern Reply reply_receive(u32 *out, const u32 *handles, u32 count, u32 reply, s64 timeout);
 extern Reply accept_session(u32 port);
 extern Reply process_id(u32 handle);
 extern Reply thread_id(u32 handle);
@@ -49,8 +52,7 @@ static u32 register_service(u32 sm, u32 space, const char *name, u32 *last_resul
 // Drop a stale registration left by the stock RO. The stock and this payload
 // share program id 0x0400000000000037, so SM may allow the replacement to
 // release the name the dead process still owns. This is currently unused: the
-// 07:10 run showed it can wedge SM's registration lock, so the payload relies
-// on the ro:2 fallback instead.
+// 07:10 run showed it can wedge SM's registration lock.
 static u32 unregister_service(u32 sm, u32 space, const char *name, u32 *last_result) {
     u32 *p = message();
     clear(p);
@@ -115,10 +117,10 @@ static Reply respond(u32 session, u64 registration_result) {
     p[10] = result;
     u64 *out = (u64 *)(p + 12);
     for (u32 i = 0; i < (output_bytes + 7) / 8; i++) out[i] = output[i];
-    // The reply path also carries the signaled-handle index through x0 on this
-    // build. Pass a real slot instead of NULL so the kernel cannot fault here.
+    // The reply path needs a real out slot, NULL handles and count 0; the
+    // kernel returns the signaled index in x1.
     u32 index = 0;
-    return reply_receive(&index, 0, session, 0);
+    return reply_receive(&index, 0, 0, session, 0);
 }
 
 __attribute__((noreturn)) void main(void) {
@@ -135,38 +137,36 @@ __attribute__((noreturn)) void main(void) {
     p[2] = 1;
     if (send_request(sm) || p[2]) for (;;) sleep_thread(1000000000);
 
-    u32 ports[3] = {0, 0, 0}, sessions[4] = {0, 0, 0, 0};
-    u32 registration[3] = {0, 0, 0};
+    u32 ports[2] = {0, 0}, sessions[4] = {0, 0, 0, 0};
+    u32 registration[2] = {0, 0};
     for (;;) {
         // Native RO registers ro:1 only in space 1. Space 2 is optional here.
         if (!ports[0]) ports[0] = register_service(sm, 2, "ro:1", &registration[0]);
-        // If stock RO owns this name, register the replacement under the
-        // fallback name below; do not call SM UnregisterService here (07:10
-        // showed it can wedge SM's registration lock).
+        // If the stock RO still owns ro:dmnt, this fails and the probe's lookup
+        // keeps returning the stock's dead port. Do not call SM UnregisterService
+        // here: 07:10 showed it can wedge SM's registration lock.
         if (!ports[1]) ports[1] = register_service(sm, 1, "ro:dmnt", &registration[1]);
-        // Fallback for the probe: a name the stock RO never owned.
-        if (!ports[2]) ports[2] = register_service(sm, 1, "ro:2", &registration[2]);
-        u32 handles[8], kinds[8], count = 0;
-        for (u32 i = 0; i < 3; i++) if (ports[i]) {
+        u32 handles[6], kinds[6], count = 0;
+        for (u32 i = 0; i < 2; i++) if (ports[i]) {
             handles[count] = ports[i]; kinds[count++] = i;
         }
         for (u32 i = 0; i < 4; i++) if (sessions[i]) {
-            handles[count] = sessions[i]; kinds[count++] = 3 + i;
+            handles[count] = sessions[i]; kinds[count++] = 2 + i;
         }
         if (!count) { sleep_thread(50000000); continue; }
         // A receive without a reply target needs a blank receive header.
         // This call waits for either a port connection or a session request.
         clear(message());
-        Reply ready = reply_receive(handles, count, 0, 50000000);
+        Reply ready = reply_receive(handles, handles, count, 0, 50000000);
         if (ready.value >= count) continue;
         u32 kind = kinds[ready.value];
         if (ready.result) {
-            if (ready.result == 0xf601 && kind >= 3) {
-                close_handle(sessions[kind - 3]); sessions[kind - 3] = 0;
+            if (ready.result == 0xf601 && kind >= 2) {
+                close_handle(sessions[kind - 2]); sessions[kind - 2] = 0;
             }
             continue;
         }
-        if (kind < 3) {
+        if (kind < 2) {
             Reply accepted = accept_session(ports[kind]);
             if (accepted.result) continue;
             u32 slot = 0;
@@ -174,7 +174,7 @@ __attribute__((noreturn)) void main(void) {
             if (slot < 4) sessions[slot] = accepted.value;
             else close_handle(accepted.value);
         } else {
-            u32 slot = kind - 3;
+            u32 slot = kind - 2;
             if (message()[0] == 2) {
                 close_handle(sessions[slot]); sessions[slot] = 0;
             } else {
