@@ -3,6 +3,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const {connect} = require("../tools/fs-memory.cjs");
+const {smCanary} = require("./canary.cjs");
+const {exportHandle} = require("./export-handle.cjs");
 const check = (ok, message) => { if (!ok) throw Error(message); };
 
 async function main(pid) {
@@ -39,10 +41,43 @@ async function main(pid) {
     const bytes = Buffer.alloc(8); bytes.writeBigUInt64LE(BigInt(pid));
     return memory.request({command: 'root-native-ipc', handle: monitor, id: 7, hex: bytes.toString('hex')});
   };
+  let handle = smClient;
   try {
-    const handle = smClient;
-    check(handle, 'The borrowed FS SM client is missing');
+    check(smClient, 'The borrowed FS SM client is missing');
     proof.aliveBefore = await liveness(); await save();
+    // The FS SM client object at sdk+0x12a0 is the authoritative liveness
+    // check: only the FS owns it, so a changed header means the FS is gone or
+    // re-initialized. The app's duplicate handle can die on its own.
+    const smProof = JSON.parse(await fs.readFile(
+      path.join(__dirname, memory.info.session + '-sm-proof.json')));
+    proof.smSourceHandle = smProof.sourceHandle;
+    proof.smAddress = smProof.address;
+    try {
+      const header = await memory.read(smProof.address - 8, 24);
+      proof.fsSm = {
+        self: await memory.pointer(smProof.address - 8) === smProof.address,
+        tag: header.readUInt32LE(4),
+        handle: header.readUInt32LE(8),
+        zero: header.readUInt32LE(12) === 0,
+        guard: header.readUInt16LE(16) === 0x101,
+        sourceMatches: header.readUInt32LE(8) === smProof.sourceHandle,
+      };
+    } catch (failure) { proof.fsSmError = failure.message; }
+    await save();
+    proof.canaryBefore = await smCanary(memory, smClient, 'probe-before');
+    handle = smClient;
+    if (!proof.canaryBefore.ok) {
+      // The app's duplicate may be closed while the FS's own handle is not:
+      // duplicate the FS handle again through the notifier and re-test it.
+      try {
+        const fresh = await exportHandle(memory, smProof.sourceHandle, 'stage-4 SM re-export');
+        proof.smReexport = {handle: fresh.handle, proof: fresh.proof};
+        await save();
+        proof.canaryFresh = await smCanary(memory, fresh.handle, 'probe-fresh');
+        if (proof.canaryFresh.ok) handle = fresh.handle;
+      } catch (failure) { proof.smReexportError = failure.message; }
+      await save();
+    }
     // The stock's ro:dmnt registration survives its process, so try the
     // payload's app-space ro:1 first (it is free and the FS may still resolve
     // it), then ro:dmnt. Each candidate gets its own lookup/challenge worker
@@ -51,10 +86,14 @@ async function main(pid) {
       {name: 'ro:1', space: 2, lookupArea: 0x240000, challengeArea: 0x1E0000},
       {name, lookupArea: 0x180000, challengeArea: 0xC0000},
     ];
+    // The worker areas are all in use, so the space marshalling form is chosen
+    // per boot: NS2_SM_LAYOUT=space-first uses space at 8 / name at 12 (the
+    // RegisterService/UnregisterService form), otherwise name at 8 / space at 16.
+    const layout = process.env.NS2_SM_LAYOUT === 'space-first' ? 'space-first' : undefined;
     const attempts = [];
     for (const candidate of candidates) {
       const lookupRow = await worker({kind: 'sm-get', handle, name: candidate.name,
-        space: candidate.space}, candidate.lookupArea);
+        space: candidate.space, layout}, candidate.lookupArea);
       const attempt = {name: candidate.name, lookup: lookupRow, challenges: []};
       attempts.push(attempt); proof.attempts = attempts; await save();
       const lookup = lookupRow.responses[0];
@@ -96,9 +135,9 @@ async function main(pid) {
       service: proof.name};
   } catch (error) {
     try { proof.aliveAfter = await liveness(); } catch (failure) { proof.livenessError = failure.message; }
-    if (smClient) {
+    if (handle) {
       try {
-        proof.lookupAfter = await memory.request({command: 'root-native-sm-service', handle: smClient, name});
+        proof.lookupAfter = await memory.request({command: 'root-native-sm-service', handle, name});
       } catch (failure) { proof.lookupAfterError = failure.message; }
     }
     proof.error = error.stack; await save();

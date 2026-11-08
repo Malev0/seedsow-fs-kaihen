@@ -266,18 +266,24 @@ async function dispatch(context, request, state, domain) {
         bytes = domain.wire.control(request.id);
       } else if (request.kind === 'control-test') bytes = domain.wire.control(3);
       else if (request.kind === 'sm-get') {
-        check(state.services.some(x => x.sm === handle) && typeof request.name === 'string' &&
-          /^[a-z0-9:-]{1,8}$/.test(request.name), 'SM worker requires the established borrowed client and a service name');
+        check((s.handles.has(handle) || state.services.some(x => x.sm === handle)) &&
+          typeof request.name === 'string' && /^[a-z0-9:-]{1,8}$/.test(request.name),
+          'SM worker requires the established borrowed client and a service name');
         bytes = Buffer.alloc(256); bytes.writeUInt32LE(0x11);
         if (request.space === undefined) {
           bytes.writeUInt32LE(2, 4); bytes.write(request.name, 8);
         } else {
-          // Try the optional trailing space word (name[2] + space) so the FS
-          // can ask for a service registered in the application namespace.
+          // Try an explicit service space. sm-service and RegisterService
+          // marshal the space as the first data word (space at 8, name at 12);
+          // the trailing-word form is the other candidate layout.
           check(Number.isInteger(request.space) && request.space >= 0 && request.space <= 3,
             'Invalid service space');
-          bytes.writeUInt32LE(3, 4); bytes.write(request.name, 8);
-          bytes.writeUInt32LE(request.space, 16);
+          bytes.writeUInt32LE(3, 4);
+          if (request.layout === 'space-first') {
+            bytes.writeUInt32LE(request.space, 8); bytes.write(request.name, 12);
+          } else {
+            bytes.write(request.name, 8); bytes.writeUInt32LE(request.space, 16);
+          }
         }
       } else if (request.kind === 'ro-probe') {
         check(typeof request.hex === 'string' && /^[0-9a-fA-F]{16}$/.test(request.hex), 'RO proof needs one 64-bit challenge');

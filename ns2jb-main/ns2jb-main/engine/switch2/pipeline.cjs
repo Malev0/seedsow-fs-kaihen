@@ -3,6 +3,7 @@ const path = require('node:path');
 const {a} = require('../shared/rpc.cjs');
 const {run} = require('../shared/stages.cjs');
 const {connect} = require('./tools/fs-memory.cjs');
+const {smCanary} = require('./ro/canary.cjs');
 const runtime = require('./ro/runtime.cjs');
 const {read, save, local, hash} = runtime;
 const check = (ok, message) => {if (!ok) throw Error(message);};
@@ -76,8 +77,23 @@ async function main() {
     await stage('Owned FS notifier', () => require('./ro/objects.cjs').main('notifier'));
     const layout = await read(local(a.session, '-layout.json'));
     await script('ro', 'test-sm', [String(layout.sdk + 0x12a0)]);
+    // Read-only SM canaries: the FS's SM session has been observed closed by
+    // stage 4, so record exactly which stage closes it (svc SessionClosed).
+    let canaryMemory = null;
+    const canary = async label => {
+      try {
+        canaryMemory ||= await connect();
+        const sm = await read(local(a.session, '-sm-proof.json'));
+        return await smCanary(canaryMemory, sm.export.handle, label);
+      } catch (error) {
+        console.log(JSON.stringify({stage: 'sm-canary', label, error: error.message}));
+        return {ok: false, error: error.message};
+      }
+    };
+    await canary('after-test-sm');
     await script('ro', 'copy-loader-root', [String(layout.target.entry)]);
     await script('ro', 'prepare-workers');
+    await canary('after-prepare-workers');
     // NS2_FS_PROBE=1 reads the FS module image (read-only, no gate). With
     // NS2_FS_PROBE_ONLY=1 the pipeline stops here instead of hitting the gate.
     if (process.env.NS2_FS_PROBE === '1') {
@@ -112,11 +128,16 @@ async function main() {
       }
       return result;
     });
+    await canary('after-donor');
     await script('ro', 'bind-sessions');
+    await canary('after-bind-sessions');
     await script('ro', 'prepare-event');
+    await canary('after-prepare-event');
     const gate = await script('ro', 'test-gate');
     check(gate.verified && gate.restored, 'The native request gate did not qualify');
+    await canary('after-test-gate');
     const launch = await script('ro', 'launch', [], 300000);
+    await canary('after-launch');
     // The wait-only/watch diagnostic deliberately leaves the app on the error
     // screen; its product is the TCP capture, not a started payload. Stop here
     // instead of reporting a fake "PM did not accept the payload" failure.
@@ -146,6 +167,7 @@ async function main() {
       process.exit(0);
     }
     const activation = await stage('Start RO payload', () => runtime.activate(launch.file));
+    await canary('after-activate');
     const proof = await stage('RO instruction challenges', () => runtime.probe(activation.pid));
     const handoff = await stage('Restore Loader session', () => runtime.handoff());
     const payload = donor.files.find(item => item.name === 'main');

@@ -197,6 +197,7 @@ async function main() {
   }
   let stopLiveness = null;
   let restoredEarly = false;
+  let parkedAfterRead = false;
   // The Loader mount is not guaranteed to land in the domain that was bound at
   // boot: a launch can open a new fsp-srv session and ConvertToDomain it. Find
   // sessions of the same class in the session pool, walk any new domain and
@@ -1407,6 +1408,18 @@ async function main() {
               }
               await save();
             }
+            if (process.env.NS2_LAUNCH_PARK_AFTER_READ === '1') {
+              // Diagnostic: leave the session parked so the FS never serves the
+              // queued close or /main. This isolates the handback as the step
+              // that closes the FS's SM session.
+              proof.handback = {signaled: false, parked: true};
+              proof.restoreSkipped = 'parked after the NPDM read';
+              parkedAfterRead = true;
+              restoredEarly = true;
+              await save();
+              console.log(JSON.stringify({stage: 'gate-parked-after-read', index: i}));
+              break;
+            }
             // Fire-and-forget handback: put the real wait handle back and wake
             // the session. Do NOT use gate.restore(): its verification loop
             // reads FS memory while the FS is serving /main, and that read is
@@ -1562,9 +1575,11 @@ async function main() {
     // A wedged endpoint or a dead console makes restore throw; record it
     // instead of masking the error that ended the stage.
     if (restoredEarly) {
-      // The session was already handed back after the NPDM Read. Do not probe
-      // row.request or restore again: the FS is serving the close and /main.
-      proof.restoreSkipped = 'restored after the NPDM read';
+      // The session was already handed back (or deliberately left parked)
+      // after the NPDM Read. Do not probe row.request or restore again: the
+      // FS is serving the close and /main, or it is still parked.
+      proof.restoreSkipped = parkedAfterRead ? 'parked after the NPDM read'
+        : 'restored after the NPDM read';
       await save();
     } else if (proof.staleCloses?.length || proof.heldClose) {
       // The Loader is blocked on a close whose domain entry we could not
@@ -1612,9 +1627,9 @@ async function main() {
         // After an early handback the slot-2 pm:dmnt start is still blocked in
         // the Loader, so wait for it too: this is what proves the FS served the
         // tail (/main) and the launch actually completed.
-        const until = Date.now() + (slot === 1 ? 10000 : (restoredEarly ? 20000 : 0));
+        const until = Date.now() + (slot === 1 ? 10000 : (restoredEarly && !parkedAfterRead ? 20000 : 0));
         const settleTimeout = Number(process.env.NS2_LAUNCH_SETTLE_TIMEOUT_MS) ||
-          (restoredEarly ? 4000 : 0);
+          (parkedAfterRead && slot === 2 ? 500 : (restoredEarly ? 4000 : 0));
         for (;;) {
           try {
             proof.settled[slot] = await memory.request({command: 'root-native-worker-settle', slot,
