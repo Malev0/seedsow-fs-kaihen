@@ -101,6 +101,19 @@ async function main(pid) {
       } catch (failure) { proof.lookupAfterError = failure.message; }
     }
     proof.error = error.stack; await save();
+    // The FS-side ro:dmnt is the stock's dead system-space port. The payload
+    // also registers ro:1 in the application space; challenge that from the
+    // game process, which is the only client that can see space 2.
+    try {
+      const app = await require('../app/probe-ro.cjs').main(pid);
+      proof.app = app;
+      proof.verified = true; proof.completed = app.completed; proof.name = app.service;
+      await save();
+      return {file, verified: true, pid, challenges: app.challenges, completed: app.completed,
+        service: app.service, app: true};
+    } catch (appError) {
+      proof.appError = appError.stack; await save();
+    }
     error.proofFile = file;
     throw error;
   }
