@@ -51,7 +51,14 @@ async function activate(launchFile) {
   check(state.worker?.joined, 'The launch worker has not joined');
   const sm = await read(local(memory.info.session, '-sm-proof.json'));
   check(sm.report === memory.reportFile && !sm.program.result, 'The original RO identity is stale');
-  const originalPid = Buffer.from(sm.program.hex, 'hex').readBigUInt64LE().toString();
+  const smOriginalPid = Buffer.from(sm.program.hex, 'hex').readBigUInt64LE().toString();
+  // NS2_LAUNCH_KILL_ORIGINAL terminates the stock RO before the replacement
+  // starts; a second instance of the same system program is what faults the
+  // console after the start. The launch proof records that termination, so the
+  // stock RO is already gone here: skip the identity and termination steps
+  // that assume it is still alive.
+  const preTerminated = Boolean(launch.originalTermination && launch.originalPid);
+  const originalPid = preTerminated ? String(launch.originalPid) : smOriginalPid;
   check(BigInt(originalPid) > 1n && BigInt(launch.pid) > 1n && originalPid !== launch.pid,
     'The original and replacement RO PIDs must be distinct');
   const shell = state.services.find(s => s.name === 'pm:shell')?.handle;
@@ -63,10 +70,17 @@ async function activate(launchFile) {
   const ipc = (handle, id, pid) => memory.request({command: 'root-native-ipc', handle, id,
     hex: encodeU64(BigInt(pid)).toString('hex')});
   await save(file, proof);
-  for (const [name, pid] of [['identity', proof.pid], ['original', originalPid]]) {
+  const identities = preTerminated ? [['identity', proof.pid]]
+    : [['identity', proof.pid], ['original', originalPid]];
+  for (const [name, pid] of identities) {
     proof[name] = await ipc(monitor, 7, pid); await save(file, proof);
     check(!proof[name].result && Buffer.from(proof[name].hex, 'hex').readBigUInt64LE() === 0x0400000000000037n,
       'PM did not identify ' + name + ' as native RO');
+  }
+  if (preTerminated) {
+    proof.originalPreTerminated = {pid: originalPid, launch: launch.originalTermination};
+    // The stock RO is already gone; a nonzero GetProgramId is the expected proof.
+    proof.originalGone = await ipc(monitor, 7, originalPid); await save(file, proof);
   }
   // flags 0 launches normally: PM already started the process during the
   // launch, so calling pm:dmnt id 1 again is unnecessary (and dangerous on a
@@ -83,9 +97,14 @@ async function activate(launchFile) {
       check(!proof.start.result, 'The accepted RO process did not start');
     }
   }
-  proof.pending = 'terminate identified original'; await save(file, proof);
-  proof.termination = await ipc(shell, 1, originalPid); await save(file, proof);
-  check(!proof.termination.result, 'The original RO process did not release its services');
+  if (preTerminated) {
+    proof.termination = {preTerminated: true, pid: originalPid, launch: launch.originalTermination};
+    await save(file, proof);
+  } else {
+    proof.pending = 'terminate identified original'; await save(file, proof);
+    proof.termination = await ipc(shell, 1, originalPid); await save(file, proof);
+    check(!proof.termination.result, 'The original RO process did not release its services');
+  }
   delete proof.pending;
   proof.finished = new Date().toISOString(); await save(file, proof);
   return {file, pid: proof.pid, originalPid};
