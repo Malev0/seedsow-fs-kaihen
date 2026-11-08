@@ -48,12 +48,13 @@ async function main(pid) {
     // it), then ro:dmnt. Each candidate gets its own lookup/challenge worker
     // areas; a settled thread must not be reused.
     const candidates = [
-      {name: 'ro:1', lookupArea: 0x240000, challengeArea: 0x1E0000},
+      {name: 'ro:1', space: 2, lookupArea: 0x240000, challengeArea: 0x1E0000},
       {name, lookupArea: 0x180000, challengeArea: 0xC0000},
     ];
     const attempts = [];
     for (const candidate of candidates) {
-      const lookupRow = await worker({kind: 'sm-get', handle, name: candidate.name}, candidate.lookupArea);
+      const lookupRow = await worker({kind: 'sm-get', handle, name: candidate.name,
+        space: candidate.space}, candidate.lookupArea);
       const attempt = {name: candidate.name, lookup: lookupRow, challenges: []};
       attempts.push(attempt); proof.attempts = attempts; await save();
       const lookup = lookupRow.responses[0];
@@ -112,7 +113,7 @@ async function main(pid) {
       return {file, verified: true, pid, challenges: app.challenges, completed: app.completed,
         service: app.service, app: true};
     } catch (appError) {
-      proof.appError = appError.stack; await save();
+      proof.appError = appError.stack; proof.appServices = appError.services; await save();
     }
     error.proofFile = file;
     throw error;
