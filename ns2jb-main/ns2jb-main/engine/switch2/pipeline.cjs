@@ -122,7 +122,14 @@ async function main() {
     if (process.env.NS2_STOP_AFTER_LAUNCH === '1') {
       console.log(JSON.stringify({stage: 'stop-after-launch', file: launch.file,
         pid: launch.pid, settled: launch.settled, completion: launch.completion}));
-      return;
+      // The diagnostic deliberately leaves the console alive, but the
+      // acquisition child and the bridge socket keep this process in the event
+      // loop. The GUI waits for the pipeline exit, so it showed "running"
+      // forever after the 04:26 control. Save the finished record and exit;
+      // the probe child keeps the retained endpoint available for host probes.
+      record.finished = new Date().toISOString();
+      await save(file, record);
+      process.exit(0);
     }
     const activation = await stage('Start RO payload', () => runtime.activate(launch.file));
     const proof = await stage('RO instruction challenges', () => runtime.probe(activation.pid));
