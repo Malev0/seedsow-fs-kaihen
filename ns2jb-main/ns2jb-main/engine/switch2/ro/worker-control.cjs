@@ -207,14 +207,16 @@ async function dispatch(context, request, state, domain) {
       : request.kind === 'retained-read' ? (request.reads?.length || 1)
       : request.kind === 'retained-write' ? Number(request.count || 1) : 1;
     const upload = batchInputs ? Buffer.alloc(count * 0x1000) : null;
-    check(['control-test', 'cmif-control', 'pm-launch', 'pm-start', 'sm-get', 'app-service', 'ro-probe', 'ro-process', 'notifier-probe', 'retained-read', 'retained-write', 'retained-dump', 'tcp-test'].includes(request.kind), 'Unknown worker operation');
+    check(['control-test', 'cmif-control', 'pm-launch', 'pm-start', 'pm-start-dump', 'sm-get', 'app-service', 'ro-probe', 'ro-process', 'notifier-probe', 'retained-read', 'retained-write', 'retained-dump', 'tcp-test'].includes(request.kind), 'Unknown worker operation');
     const calls = [{function: live.sdk + events.code.wait.offset, args: [gate, 0, 0, 0]}];
     // Connect before any FS traffic. svcSendSyncRequest (the worker's retained
     // read) blocks until the FS server replies, and the flags-0 load holds that
     // server, so a post-read connect never runs. The tcp-test worker (no FS
     // read) connected immediately; the retained-dump worker did not.
     let dumpSocket = -1;
-    if (request.kind === 'retained-dump') {
+    if (request.kind === 'retained-dump' || request.kind === 'pm-start-dump') {
+      // Connect before the blocking FS send; the pm:dmnt start holds until the
+      // Loader finishes, so a post-send connect never runs.
       const sa = Buffer.alloc(16);
       sa[0] = 16; sa[1] = 2; sa.writeUInt16BE(Number(request.port), 2);
       sa.writeUInt32BE(Number(request.pcAddress) >>> 0, 4);
@@ -337,7 +339,7 @@ async function dispatch(context, request, state, domain) {
         if (Number(request.delayNs || 0) > 0)
           calls.push({function: live.sdk + 0x168b54, args: [Number(request.delayNs), 0, 0, 0]});
         bytes = packet(0, input, {receive: [{address: area + 0x10000, size: request.length, mode: 1}]});
-      } else if (request.kind === 'pm-start') {
+      } else if (request.kind === 'pm-start' || request.kind === 'pm-start-dump') {
         check(state.services?.some(x => x.name === 'pm:dmnt' && x.handle === handle),
           'Start requires the owned PM monitor');
         const pid = Number(request.pid);
@@ -371,9 +373,17 @@ async function dispatch(context, request, state, domain) {
       // or after a short idle gap, so leaving the fd open costs nothing and may
       // keep the app alive for the post-load inspection.
     }
+    if (request.kind === 'pm-start-dump') {
+      // The pm:dmnt reply page is at `address` (area + 0x1000) once the send
+      // returns. Ship it to the PC before the console can freeze, so the start
+      // result survives even if the launched process faults.
+      calls.push({function: live.sdk + SOCK.send,
+        args: [{result: dumpSocket}, area + 0x1000, 0x100, 0]});
+    }
     const worker = await native.start(s, area + 0x20000, 0x40000, slot, calls,
       'ro-' + request.kind + '-' + Date.now(), 0,
-      {forceHost: request.kind === 'retained-dump' || request.kind === 'tcp-test'});
+      {forceHost: request.kind === 'retained-dump' || request.kind === 'tcp-test' ||
+        request.kind === 'pm-start-dump'});
     Object.assign(worker, {kind: request.kind, handle, gate, area, count, released: false,
       serviceName: request.name, challenge: request.hex, candidates: batchInputs || undefined,
       processCommand: request.kind === 'ro-process' ? Number(request.id) : undefined,

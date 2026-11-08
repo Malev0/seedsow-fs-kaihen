@@ -743,8 +743,15 @@ async function main() {
         proof.holderProbe.handleMatches,
         'Holder candidate is not the bound session object; refusing to inject');
       await gate.parkSession(); proof.parked = true; await save();
+      // Optional worker-side TCP dump of the pm:dmnt reply. The console can
+      // freeze the moment the launched process faults, so the reply must reach
+      // the PC without a host RPC.
+      const dumpStart = process.env.NS2_LAUNCH_START_DUMP === '1';
+      proof.startDump = dumpStart ? {host: dumpHost(), port: Number(process.env.NS2_DUMP_PORT || 39401)} : null;
       proof.startWorker = await memory.request({command: 'root-native-worker-prepare', slot: 2,
-        areaOffset: 0x100000, kind: 'pm-start', handle: monitor, pid: Number(pid)});
+        areaOffset: 0x100000, kind: dumpStart ? 'pm-start-dump' : 'pm-start', handle: monitor, pid: Number(pid),
+        pcAddress: dumpStart ? proof.startDump.host : undefined,
+        port: dumpStart ? proof.startDump.port : undefined});
       proof.startRelease = await memory.request({command: 'root-native-worker-release', slot: 2});
       proof.start = {result: 0, worker: true}; proof.startPid = pid;
       await save();
