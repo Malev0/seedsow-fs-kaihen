@@ -43,32 +43,50 @@ async function main(pid) {
     const handle = smClient;
     check(handle, 'The borrowed FS SM client is missing');
     proof.aliveBefore = await liveness(); await save();
-    proof.lookup = await worker({kind: 'sm-get', handle, name}, 0x180000);
-    await save();
-    const lookup = proof.lookup.responses[0];
-    check(!lookup.transport && !lookup.result && lookup.handle, 'The service lookup failed');
-    proof.handle = lookup.handle;
-    let previousTick = 0n;
-    for (let i = 0; i < 2; i++) {
-      const nonce = crypto.randomBytes(8);
-      const row = {nonce: nonce.toString('hex')};
-      proof.challenges.push(row); await save();
-      row.reply = await worker({kind: 'ro-probe', handle: proof.handle, hex: row.nonce}, 0x1E0000);
+    // The stock's ro:dmnt registration survives its process, so try the
+    // payload's app-space ro:1 first (it is free and the FS may still resolve
+    // it), then ro:dmnt. Each candidate gets its own lookup/challenge worker
+    // areas; a settled thread must not be reused.
+    const candidates = [
+      {name: 'ro:1', lookupArea: 0x240000, challengeArea: 0x1E0000},
+      {name, lookupArea: 0x180000, challengeArea: 0xC0000},
+    ];
+    const attempts = [];
+    for (const candidate of candidates) {
+      const lookupRow = await worker({kind: 'sm-get', handle, name: candidate.name}, candidate.lookupArea);
+      const attempt = {name: candidate.name, lookup: lookupRow, challenges: []};
+      attempts.push(attempt); proof.attempts = attempts; await save();
+      const lookup = lookupRow.responses[0];
+      if (lookup.transport || lookup.result || !lookup.handle) continue;
+      let previousTick = 0n, verified = true;
+      for (let i = 0; i < 2; i++) {
+        const nonce = crypto.randomBytes(8);
+        const row = {nonce: nonce.toString('hex')};
+        attempt.challenges.push(row); await save();
+        row.reply = await worker({kind: 'ro-probe', handle: lookup.handle, hex: row.nonce}, candidate.challengeArea);
+        await save();
+        const reply = row.reply.responses[0];
+        if (reply.transport || reply.result || reply.kernelPid !== pid) { verified = false; break; }
+        const data = Buffer.from(reply.data, 'hex');
+        if (!(data.length >= 48 && data.readBigUInt64LE() === 0x4558454f5232534en &&
+          data.readBigUInt64LE(8) === (nonce.readBigUInt64LE() ^ 0x9d7c3a51e6b2048fn) &&
+          data.readBigUInt64LE(16) === BigInt(pid))) { verified = false; break; }
+        row.threadId = data.readBigUInt64LE(24).toString();
+        row.tick = data.readBigUInt64LE(32).toString();
+        row.registration = data.subarray(40, 48).toString('hex');
+        if (BigInt(row.tick) <= previousTick) { verified = false; break; }
+        previousTick = BigInt(row.tick);
+        row.verified = true; await save();
+      }
+      if (verified && attempt.challenges.length === 2) {
+        proof.name = candidate.name; proof.handle = lookup.handle;
+        proof.challenges = attempt.challenges; proof.verified = true;
+        break;
+      }
+      await memory.request({command: 'root-native-close-handle', handle: lookup.handle});
       await save();
-      const reply = row.reply.responses[0];
-      check(!reply.transport && !reply.result && reply.kernelPid === pid, 'The challenge did not return from the expected kernel PID');
-      const data = Buffer.from(reply.data, 'hex');
-      check(data.length >= 48 && data.readBigUInt64LE() === 0x4558454f5232534en &&
-        data.readBigUInt64LE(8) === (nonce.readBigUInt64LE() ^ 0x9d7c3a51e6b2048fn) &&
-        data.readBigUInt64LE(16) === BigInt(pid), 'The native payload response differs');
-      row.threadId = data.readBigUInt64LE(24).toString();
-      row.tick = data.readBigUInt64LE(32).toString();
-      row.registration = data.subarray(40, 48).toString('hex');
-      check(BigInt(row.tick) > previousTick, 'The native tick did not advance');
-      previousTick = BigInt(row.tick);
-      row.verified = true; await save();
     }
-    proof.verified = true;
+    check(proof.verified, 'No RO service returned the native challenge');
     proof.completed = new Date().toISOString();
     await save();
     proof.closed = await memory.request({command: 'root-native-close-handle', handle: proof.handle});
