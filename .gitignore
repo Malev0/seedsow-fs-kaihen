@@ -26,7 +26,10 @@ research/Seedsow Lullaby Demo */
 # Session / per-boot state. Regenerated on every run and not reusable on
 # another console or PC, so it is not needed to run this.
 HANDOFF.md
+COMPACTION.md
 docs/history/
+# Local copyrighted system/game dumps
+FW dump Switch2 JPN/
 ns2jb-main/ns2jb-main/engine/connection.json
 ns2jb-main/ns2jb-main/engine/switch2/status.txt
 ns2jb-main/ns2jb-main/engine/switch2/pipeline.json
@@ -36,6 +39,8 @@ ns2jb-main/ns2jb-main/engine/switch2/app/memory-map.json
 ns2jb-main/ns2jb-main/engine/switch2/app/mounts.json
 ns2jb-main/ns2jb-main/engine/switch2/app/ro-retained-dump-*
 ns2jb-main/ns2jb-main/engine/switch2/app/ro-tcp-test-*
+ns2jb-main/ns2jb-main/engine/switch2/app/ro-pm-start-dump-*
+start-dump.bin
 ns2jb-main/ns2jb-main/engine/switch2/memory/reserved-gap-*
 ns2jb-main/ns2jb-main/engine/switch2/retained/seedsow-metadata-*
 ns2jb-main/ns2jb-main/engine/switch2/retained/reserved-gap-*
@@ -54,3 +59,6 @@ dump-*.bin
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Stray nested Obsidian config
+vault/.obsidian/.obsidian/
