@@ -142,10 +142,14 @@ __attribute__((noreturn)) void main(void) {
     for (;;) {
         // Native RO registers ro:1 only in space 1. Space 2 is optional here.
         if (!ports[0]) ports[0] = register_service(sm, 2, "ro:1", &registration[0]);
-        // If the stock RO still owns ro:dmnt, this fails and the probe's lookup
-        // keeps returning the stock's dead port. Do not call SM UnregisterService
-        // here: 07:10 showed it can wedge SM's registration lock.
-        if (!ports[1]) ports[1] = register_service(sm, 1, "ro:dmnt", &registration[1]);
+        // If the stock RO still owns ro:dmnt, release SM's stale registration
+        // first. The 07:10/07:24 wedges were the ro:2 registration, not this
+        // call; retry it alone now that ro:2 is gone.
+        if (!ports[1]) {
+            u32 stale = 0;
+            unregister_service(sm, 1, "ro:dmnt", &stale);
+            ports[1] = register_service(sm, 1, "ro:dmnt", &registration[1]);
+        }
         u32 handles[6], kinds[6], count = 0;
         for (u32 i = 0; i < 2; i++) if (ports[i]) {
             handles[count] = ports[i]; kinds[count++] = i;
