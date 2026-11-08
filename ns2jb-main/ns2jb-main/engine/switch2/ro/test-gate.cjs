@@ -74,7 +74,10 @@ async function main() {
   const workerTest = process.env.NS2_GATE_WORKER === '1';
   try {
     if (workerTest)
-      result.worker = await memory.request({command: 'root-native-worker-prepare', kind: 'control-test', handle: state.inspectionDomain.handle});
+      // Settled without joining (TryWaitThread blocks in pthread_exit), so keep
+      // this thread out of area 0: the post-launch workers reuse area 0.
+      result.worker = await memory.request({command: 'root-native-worker-prepare', kind: 'control-test',
+        handle: state.inspectionDomain.handle, areaOffset: 0x60000});
     // Read-only holder probe BEFORE parking. The FS wait chain links the session
     // object itself, so the holder is the bound row. Before parking the session
     // still holds the real wait handle, so handle == sessionWait is the cleanest

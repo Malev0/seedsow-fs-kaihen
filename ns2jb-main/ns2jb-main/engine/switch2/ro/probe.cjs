@@ -15,13 +15,19 @@ async function main(pid) {
   const file = path.join(__dirname, memory.info.session + '-execution-proof-' + Date.now() + '.json');
   const save = () => fs.writeFile(file, JSON.stringify(proof, null, 2) + '\n', {mode: 0o600});
   await save();
-  async function worker(request) {
-    await memory.request({command: 'root-native-worker-prepare', ...request});
+  async function worker(request, areaOffset) {
+    await memory.request({command: 'root-native-worker-prepare', ...request, areaOffset});
     await memory.request({command: 'root-native-worker-release'});
     const until = Date.now() + 4000;
     for (;;) {
-      const status = await memory.request({command: 'root-native-worker-state'});
-      if (status.finished) return memory.request({command: 'root-native-worker-join'});
+      // TryWaitThread blocks inside pthread_exit on this build, so derive
+      // completion from the stored result cells and settle instead of joining.
+      // A settled thread keeps its stack, so each probe worker gets its own
+      // area (0x180000 / 0x1E0000; test-gate uses 0x60000, launch 0x100000 and
+      // 0x2A0000; area 0 stays free for the stage-4 join workers).
+      const values = await memory.request({command: 'root-native-worker-values'});
+      if (values.values.every(value => value !== values.sentinel))
+        return memory.request({command: 'root-native-worker-settle'});
       check(Date.now() < until, 'Proof worker remains pending; preserved without issuing another synchronous IPC');
       await new Promise(resolve => setTimeout(resolve, 25));
     }
@@ -29,7 +35,7 @@ async function main(pid) {
   try {
     const handle = state.services.find(s => s.name === 'pm:shell')?.sm;
     check(handle, 'The borrowed FS SM client is missing');
-    proof.lookup = await worker({kind: 'sm-get', handle, name});
+    proof.lookup = await worker({kind: 'sm-get', handle, name}, 0x180000);
     await save();
     const lookup = proof.lookup.responses[0];
     check(!lookup.transport && !lookup.result && lookup.handle, 'The service lookup failed');
@@ -39,7 +45,7 @@ async function main(pid) {
       const nonce = crypto.randomBytes(8);
       const row = {nonce: nonce.toString('hex')};
       proof.challenges.push(row); await save();
-      row.reply = await worker({kind: 'ro-probe', handle: proof.handle, hex: row.nonce});
+      row.reply = await worker({kind: 'ro-probe', handle: proof.handle, hex: row.nonce}, 0x1E0000);
       await save();
       const reply = row.reply.responses[0];
       check(!reply.transport && !reply.result && reply.kernelPid === pid, 'The challenge did not return from the expected kernel PID');
