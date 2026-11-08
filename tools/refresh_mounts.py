@@ -50,7 +50,7 @@ mounts = []
 pattern = re.compile(
     r'^mount name=(\S+) accessor=(0x[0-9a-fA-F]+) impl=(0x[0-9a-fA-F]+) '
     r'service=(0x[0-9a-fA-F]+) vtable=(0x[0-9a-fA-F]+) '
-    r'manager=(0x[0-9a-fA-F]+) objectId=(\d+) borrowed=(\d+)$', re.M)
+    r'manager=(0x[0-9a-fA-F]+) objectId=(\d+) borrowed=(\d+)\r?$', re.M)
 for match in pattern.finditer(out):
     mounts.append({
         'name': match.group(1),
