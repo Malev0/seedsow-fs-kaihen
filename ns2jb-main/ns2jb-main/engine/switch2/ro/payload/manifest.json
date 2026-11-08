@@ -1,7 +1,7 @@
 {
   "platform": 2,
   "programId": "0400000000000037",
-  "payloadBytes": 4922,
-  "payloadSha256": "a34eba3f23d4560c956732dcf7b9512a30d0f5257bc6d9b915e820bf8cfe6a79",
+  "payloadBytes": 4826,
+  "payloadSha256": "d05deceb73e7d2b91c85abcafb1cb37ce969ae30c222672970bbc4721ab17ebe",
   "policySha256": "f63138f1e3f747af5e881c2402d30762e338c372c34069b2e20f1f28198865de"
 }

@@ -48,7 +48,9 @@ static u32 register_service(u32 sm, u32 space, const char *name, u32 *last_resul
 
 // Drop a stale registration left by the stock RO. The stock and this payload
 // share program id 0x0400000000000037, so SM may allow the replacement to
-// release the name the dead process still owns.
+// release the name the dead process still owns. This is currently unused: the
+// 07:10 run showed it can wedge SM's registration lock, so the payload relies
+// on the ro:2 fallback instead.
 static u32 unregister_service(u32 sm, u32 space, const char *name, u32 *last_result) {
     u32 *p = message();
     clear(p);
@@ -138,13 +140,10 @@ __attribute__((noreturn)) void main(void) {
     for (;;) {
         // Native RO registers ro:1 only in space 1. Space 2 is optional here.
         if (!ports[0]) ports[0] = register_service(sm, 2, "ro:1", &registration[0]);
-        // If stock RO owns this name, release the stale registration, then
-        // register the replacement. The stock is already terminated.
-        if (!ports[1]) {
-            u32 stale = 0;
-            unregister_service(sm, 1, "ro:dmnt", &stale);
-            ports[1] = register_service(sm, 1, "ro:dmnt", &registration[1]);
-        }
+        // If stock RO owns this name, register the replacement under the
+        // fallback name below; do not call SM UnregisterService here (07:10
+        // showed it can wedge SM's registration lock).
+        if (!ports[1]) ports[1] = register_service(sm, 1, "ro:dmnt", &registration[1]);
         // Fallback for the probe: a name the stock RO never owned.
         if (!ports[2]) ports[2] = register_service(sm, 1, "ro:2", &registration[2]);
         u32 handles[8], kinds[8], count = 0;
