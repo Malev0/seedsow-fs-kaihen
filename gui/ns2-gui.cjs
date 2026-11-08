@@ -95,6 +95,9 @@ function computeProgress() {
 }
 const clients = new Set();
 let child = null;
+// Set while the pipeline is holding the FS endpoint after stage 4. The pipeline
+// child stays alive on its IPC channel until the GUI sends {type:'release'}.
+let held = null;
 
 function publicState() {
   return {
@@ -314,11 +317,16 @@ async function poller() {
   }
 }
 
-function runStream(file, args, {cwd, env, prefix, timeoutMs}) {
+function runStream(file, args, {cwd, env, prefix, timeoutMs, ipc, onMessage}) {
   return new Promise(resolve => {
     addLine(`${prefix}$ ${path.basename(file)} ${args.join(' ')}`);
-    const p = spawn(file, args, {cwd: cwd || ROOT, env: env || process.env, windowsHide: true});
+    const options = {cwd: cwd || ROOT, env: env || process.env, windowsHide: true};
+    // The held-RPC pipeline needs an IPC channel to report `held-ready` and to
+    // receive `{type:'release'}` when the user retires the endpoint.
+    if (ipc) options.stdio = ['ignore', 'pipe', 'pipe', 'ipc'];
+    const p = spawn(file, args, options);
     child = p;
+    if (ipc && typeof onMessage === 'function') p.on('message', message => onMessage(message, p));
     let settled = false;
     let timer = null;
     const finish = code => {
@@ -468,7 +476,25 @@ async function runPipeline() {
     NS2_ACQUIRE_TIMEOUT_MS: '2700000', NS2_ACQUIRE_ATTEMPTS: '1', ...extra};
   if (Object.keys(extra).length) addLine('[gui] env overrides: ' +
     Object.entries(extra).map(([key, value]) => `${key}=${value}`).join(' '));
-  const code = await runStream('node', ['pipeline.cjs', '--dump-firmware'], {cwd: SWITCH2, env, prefix: '[run] '});
+  // Stage 4 is the last fixed step. Hold the FS endpoint and the console RPC
+  // afterwards instead of dumping firmware, so commands can be sent without a
+  // relaunch. The pipeline exits only after the GUI sends {type:'release'}.
+  const code = await runStream('node', ['pipeline.cjs', '--hold-rpc'], {
+    cwd: SWITCH2, env, prefix: '[run] ', ipc: true,
+    onMessage: message => {
+      if (message?.type === 'held-ready') {
+        held = {session: message.session, at: Date.now()};
+        setState({phase: 'held',
+          message: 'Stage 4 passed. RPC held - use the bridge, then Release.',
+          pipeline: readPipeline(), report: readReport(),
+          progress: computeProgress() || state.progress});
+        addLine(`[gui] stage 4 passed; RPC held (session ${message.session}).`);
+        addLine('[gui] console RPC: http://127.0.0.1:31337 (rpc-run / call / read / write)');
+        addLine('[gui] FS endpoint: tools/fs-memory.cjs connect(); POST /api/release to retire.');
+      }
+    }
+  });
+  held = null;
 
   const pipeline = readPipeline();
   const report = readReport();
@@ -732,9 +758,27 @@ const server = http.createServer(async (req, res) => {
         finishedAt: Date.now()});
       return send(200, JSON.stringify({ok: true}));
     }
+    if (req.method === 'POST' && url.pathname === '/api/release') {
+      if (!held) return send(409, JSON.stringify({error: 'no held run'}));
+      if (!child || child.connected === false)
+        return send(409, JSON.stringify({error: 'held pipeline is not connected'}));
+      try { child.send({type: 'release'}); }
+      catch (error) { return send(500, JSON.stringify({error: error.message})); }
+      addLine('[gui] release: retiring the held FS endpoint ...');
+      setState({phase: 'running', message: 'Releasing the held endpoint ...'});
+      return send(200, JSON.stringify({ok: true}));
+    }
     if (req.method === 'POST' && url.pathname === '/api/stop') {
-      killTree();
-      setState({phase: 'finished', message: 'Stopped.', finishedAt: Date.now()});
+      if (held && child && child.connected !== false) {
+        // Retire the held endpoint cleanly instead of killing the pipeline; the
+        // pipeline exits after acquisition.retire() completes.
+        try { child.send({type: 'release'}); } catch {}
+        addLine('[gui] stop: release sent; retiring the held endpoint ...');
+        setState({phase: 'running', message: 'Releasing the held endpoint ...'});
+      } else {
+        killTree();
+        setState({phase: 'finished', message: 'Stopped.', finishedAt: Date.now()});
+      }
       return send(200, JSON.stringify({ok: true}));
     }
     if (req.method === 'POST' && url.pathname === '/api/clean') {

@@ -29,6 +29,7 @@
   .pill.setup, .pill.running { color: var(--amber); border-color: #4a3d16; }
   .pill.restarting { color: #c4b5fd; border-color: #3b2f63; }
   .pill.finished { color: var(--blue); }
+  .pill.held { color: var(--green); border-color: #1c6b57; }
   .pill.crashed { color: var(--red); border-color: #4a2424; }
   .spacer { flex: 1; }
   .console { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
@@ -168,6 +169,7 @@
     </label>
     <button id="crashed">App crashed / relaunched</button>
     <button id="stop">Stop run</button>
+    <button id="release" title="Stage 4 passed: retire the held FS endpoint and finish the run">Release RPC</button>
     <button id="clean">Clean save</button>
   </div>
 
@@ -242,7 +244,8 @@
 </main>
 
 <footer>
-  Start = <code>resume.ps1</code> (stop-all, shim, mounts, bridge) then <code>pipeline.cjs --dump-firmware</code>.
+  Start = <code>resume.ps1</code> (stop-all, shim, mounts, bridge) then <code>pipeline.cjs --hold-rpc</code>.
+  After stage 4 the RPC is held: use <code>127.0.0.1:31337</code> and press Release to retire.
   API: <code>127.0.0.1:31338/api/state</code>
 </footer>
 
@@ -319,12 +322,14 @@ function renderState(s) {
     $('pdetail').textContent = '';
   }
 
-  const busy = s.phase === 'setup' || s.phase === 'running';
+  const held = s.phase === 'held';
+  const busy = s.phase === 'setup' || s.phase === 'running' || held;
   const restarting = s.phase === 'restarting';
   $('start').disabled = busy || restarting;
   $('restart').disabled = busy || restarting;
   $('crashed').disabled = restarting;
   $('stop').disabled = !busy;
+  $('release').disabled = !held;
 
   const parts = [];
   if (s.report) {
@@ -431,6 +436,7 @@ $('restart').addEventListener('click', () => {
 });
 $('crashed').addEventListener('click', () => post('/api/crashed'));
 $('stop').addEventListener('click', () => post('/api/stop'));
+$('release').addEventListener('click', () => post('/api/release'));
 $('clean').addEventListener('click', () => post('/api/clean'));
 
 // ---- manual Pico controller --------------------------------------------------
