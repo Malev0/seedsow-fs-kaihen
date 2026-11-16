@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NS2JB · Seedsow Bridge</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b23; --panel2: #1d242e; --text: #dbe3ee;
+    --muted: #8b98ab; --line: #2a323d; --green: #34d399; --amber: #fbbf24;
+    --red: #f87171; --blue: #60a5fa; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .2px; }
+  .pill {
+    font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+    background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+  }
+  .pill.setup, .pill.running { color: var(--amber); border-color: #4a3d16; }
+  .pill.restarting { color: #c4b5fd; border-color: #3b2f63; }
+  .pill.finished { color: var(--blue); }
+  .pill.failed { color: var(--red); border-color: #4a2424; }
+  .spacer { flex: 1; }
+  .console { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .console input {
+    width: 10.5em; font: 12px/1.4 var(--mono); color: var(--text);
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.up { background: var(--green); box-shadow: 0 0 8px #34d39988; }
+  .dot.down { background: var(--red); }
+  .tabs { display: flex; gap: 4px; }
+  .tab {
+    padding: 6px 14px; border-radius: 8px 8px 0 0; border: 1px solid transparent;
+    color: var(--muted); cursor: pointer; font-weight: 600; font-size: 13px;
+  }
+  .tab.active { background: var(--bg); border-color: var(--line); border-bottom-color: var(--bg); color: var(--text); }
+  main { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; min-height: 0; }
+  .pane { display: none; flex: 1; flex-direction: column; gap: 12px; min-height: 0; }
+  .pane.active { display: flex; }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 14px; border-radius: 9px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+    cursor: pointer; transition: filter .12s ease, transform .05s ease;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.15); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
+  #start, .primary { background: #12463a; border-color: #1c6b57; color: #d1fae5; }
+  #restart { background: #2b2450; border-color: #453a7a; color: #e9e3ff; }
+  #failed { background: #4a2020; border-color: #6b2d2d; color: #fee2e2; }
+  .buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+    font-size: 12.5px; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 9px; background: var(--panel);
+  }
+  .toggle input { accent-color: #60a5fa; }
+  .toggle input[type=number] {
+    width: 6.5em; font: 12px/1.4 var(--mono); color: var(--text);
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px;
+  }
+  .statusline { display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
+  .msg { color: var(--text); }
+  .stage { font-family: var(--mono); font-size: 12.5px; color: var(--amber); }
+  .steps { display: flex; gap: 8px; }
+  .step {
+    font-size: 12px; font-family: var(--mono); padding: 3px 9px; border-radius: 6px;
+    background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+  }
+  .step.active { color: #0e1116; background: var(--amber); border-color: var(--amber); font-weight: 700; }
+  .step.done { color: var(--green); border-color: #1c6b57; }
+  .progressrow { display: flex; align-items: center; gap: 10px; }
+  .pstage { font-family: var(--mono); font-size: 12.5px; color: var(--text); min-width: 64px; }
+  .bar { flex: 1; height: 10px; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(90deg, #2dd4bf, #60a5fa); transition: width .4s ease; }
+  .ppct { font-family: var(--mono); font-size: 12.5px; min-width: 44px; text-align: right; }
+  .pdetail { font-family: var(--mono); font-size: 11.5px; color: var(--muted); max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .controls {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  }
+  .controls .clabel { font-size: 11.5px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); font-weight: 700; }
+  .pad { display: grid; grid-template-columns: repeat(3, 30px); grid-template-rows: repeat(3, 30px); gap: 3px; }
+  .pad button { width: 30px; height: 30px; padding: 0; font-size: 12px; }
+  .pad .up { grid-column: 2; grid-row: 1; }
+  .pad .left { grid-column: 1; grid-row: 2; }
+  .pad .right { grid-column: 3; grid-row: 2; }
+  .pad .down { grid-column: 2; grid-row: 3; }
+  .group { display: flex; gap: 4px; align-items: center; }
+  .controls button { min-width: 34px; height: 32px; padding: 0 8px; font-size: 12.5px; border-radius: 8px; }
+  .controls button.pressed { background: #0f3a33; border-color: #1c6b57; color: #d1fae5; }
+  #controllerRelease { background: #3a2a1a; border-color: #6b4a2d; color: #fde8c8; }
+  .controllerstate { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .controllerstate.up { color: var(--green); }
+  .controllerstate.warn { color: var(--amber); }
+  .controllerstate.down { color: var(--red); }
+  .bridge-note { font-size: 11.5px; color: var(--muted); }
+  .bridge-note.bad { color: var(--red); }
+  details.controller { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0 12px 10px; }
+  details.controller > summary {
+    cursor: pointer; list-style: none; padding: 9px 0; font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: .8px; color: var(--muted); font-weight: 700;
+  }
+  details.controller > summary::-webkit-details-marker { display: none; }
+  details.controller > summary::before { content: '▸ '; }
+  details.controller[open] > summary::before { content: '▾ '; }
+  .controller-body { display: flex; flex-direction: column; gap: 10px; }
+  .seq { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .seq th, .seq td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  .seq th { color: var(--muted); font-weight: 500; }
+  .seq select, .seq input { font: 12px/1.4 var(--mono); color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; }
+  .seq input[type=number] { width: 5.5em; }
+  .grid { display: grid; grid-template-columns: 1fr 300px; gap: 12px; flex: 1; min-height: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .panel h2 { margin: 0; padding: 9px 12px; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); border-bottom: 1px solid var(--line); background: var(--panel2); font-weight: 700; }
+  #log, #rpcLog { flex: 1; overflow: auto; padding: 10px 12px; font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
+  #log .err, #rpcLog .err { color: var(--red); }
+  #log .ok, #rpcLog .ok { color: var(--green); }
+  #log .dim, #rpcLog .dim { color: var(--muted); }
+  #log .gui, #rpcLog .gui { color: var(--blue); }
+  #detail { padding: 10px 12px; overflow: auto; font-size: 12.5px; }
+  #detail dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; }
+  #detail dt { color: var(--muted); }
+  #detail dd { margin: 0; font-family: var(--mono); word-break: break-word; }
+  #detail .bad { color: var(--red); }
+  #detail .good { color: var(--green); }
+  #detail .stages { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+  #detail .stages div { display: flex; justify-content: space-between; gap: 8px; font-family: var(--mono); font-size: 12px; }
+  #detail .stages .complete { color: var(--green); }
+  #detail .stages .failed { color: var(--red); }
+  #detail .stages .pending { color: var(--muted); }
+  .rpc-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .rpc-row input[type=text], .rpc-row select {
+    font: 12.5px/1.4 var(--mono); color: var(--text); background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
+  }
+  .rpc-row input[type=text] { flex: 1 1 320px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .card h2 { margin: 0; font-size: 13px; font-weight: 700; }
+  .card .sub { color: var(--muted); font-size: 12px; }
+  .table-wrap { max-height: 42vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  table.data { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.data th, table.data td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.data th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--panel2); }
+  table.data td.mono { font-family: var(--mono); }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.ok { color: var(--green); border-color: #1c6b57; }
+  .badge.bad { color: var(--red); border-color: #4a2424; }
+  .badge.warn { color: var(--amber); border-color: #4a3d16; }
+  .result { margin: 0; background: #0c0f14; border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; max-height: 34vh; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12px; }
+  footer { padding: 8px 16px; color: var(--muted); font-size: 11.5px; border-top: 1px solid var(--line); }
+  code { font-family: var(--mono); }
+  .hint { color: var(--muted); font-size: 11.5px; }
+  .danger { color: var(--red); }
+</style>
+</head>
+<body>
+<header>
+  <h1>NS2JB · Seedsow Bridge</h1>
+  <span id="phase" class="pill idle">idle</span>
+  <span class="spacer"></span>
+  <span class="console">
+    <span id="dot" class="dot"></span><span id="console"></span>
+    <input id="consoleIp" spellcheck="false" autocomplete="off"
+      title="Console IP address, saved to tools/console-host.txt (press Start afterwards to restart the bridge on it)">
+    <button id="consoleSet" class="small" title="Save this address and probe the console">Set IP</button>
+    <button id="quitGui" class="small" title="Stop the GUI process. The browser tab can stay open.">Stop GUI</button>
+    <span class="console">
+      <button id="kaihenUpdate" class="small" title="Choose an unpacked kaiHEN release folder and copy it into <repo>/kaihen">Update kaiHEN (local folder)</button>
+      <button id="kaihenReleases" class="small" title="Open the kaiHEN releases page in a new tab">Open kaiHEN releases</button>
+    </span>
+  </span>
+</header>
+
+<main>
+  <section id="pane-exploit" class="pane active">
+    <div class="buttons">
+      <button id="start">Start on this boot</button>
+      <button id="failed">Attempt failed</button>
+      <button id="stop">Stop run</button>
+    </div>
+
+    <div class="statusline">
+      <span id="msg" class="msg">Ready.</span>
+      <span id="stage" class="stage"></span>
+      <span class="spacer"></span>
+      <div class="steps">
+        <span class="step" data-step="1">1 · acquire</span>
+        <span class="step" data-step="2">2 · retained</span>
+        <span class="step" data-step="3">3 · RO</span>
+        <span class="step" data-step="4">4 · process</span>
+      </div>
+    </div>
+
+    <div class="progressrow">
+      <span id="pstage" class="pstage">Stage –</span>
+      <div class="bar"><div id="pfill"></div></div>
+      <span id="ppct" class="ppct">—</span>
+      <span id="pdetail" class="pdetail"></span>
+    </div>
+
+    <details class="controller">
+      <summary>Controller</summary>
+      <div class="controller-body">
+        <div class="rpc-row">
+          <span id="controllerState" class="controllerstate">bridge: ?</span>
+          <span id="controllerBridgeNote" class="bridge-note">The bridge is required to send controller input.</span>
+          <span class="spacer"></span>
+          <label class="toggle" title="How long each manual press is held">hold
+            <input type="number" id="holdMs" min="40" max="5000" step="10" value="150"> ms
+          </label>
+          <button id="controllerRelease" class="small" title="Drop queued steps and release every button">Release all</button>
+        </div>
+
+        <div class="rpc-row">
+          <label class="toggle" title="Second A block: press A twice, or once after removing a profile">
+            <input type="checkbox" id="atwice" checked> A &times;2
+          </label>
+          <label class="toggle" title="Wait after the last A (while the app boots) before pressing Y. Raise it if the restart misses the launcher.">
+            Y delay <input type="number" id="ydelay" min="0" max="60000" step="250" value="3000"> ms
+          </label>
+          <label class="toggle" title="When a run fails before 3/4, relaunch the app and try another boot automatically">
+            <input type="checkbox" id="autoRetry"> auto
+            <input type="number" id="autoAttempts" min="1" max="20" step="1" value="6"> tries
+          </label>
+          <button id="restart" title="Stop the run and send the controller restart sequence">Restart Game</button>
+        </div>
+
+        <div class="rpc-row">
+          <div class="pad">
+            <button data-button="DPAD_UP" class="up" title="D-pad up">&#9650;</button>
+            <button data-button="DPAD_LEFT" class="left" title="D-pad left">&#9664;</button>
+            <button data-button="DPAD_RIGHT" class="right" title="D-pad right">&#9654;</button>
+            <button data-button="DPAD_DOWN" class="down" title="D-pad down">&#9660;</button>
+          </div>
+          <div class="group">
+            <button data-button="Y" title="Y">Y</button>
+            <button data-button="X" title="X">X</button>
+            <button data-button="B" title="B">B</button>
+            <button data-button="A" title="A">A</button>
+          </div>
+          <div class="group">
+            <button data-button="L" title="L">L</button>
+            <button data-button="ZL" title="ZL">ZL</button>
+            <button data-button="R" title="R">R</button>
+            <button data-button="ZR" title="ZR">ZR</button>
+          </div>
+          <div class="group">
+            <button data-button="PLUS" title="Plus">+</button>
+            <button data-button="MINUS" title="Minus">&minus;</button>
+            <button data-button="HOME" title="Home">&#8962;</button>
+            <button data-button="CAPTURE" title="Capture">&#9635;</button>
+          </div>
+        </div>
+
+        <div class="rpc-row">
+          <span class="clabel">Action</span>
+          <select id="controllerProfile">
+            <option value="start">Start exploit sequence (A ×2, Y)</option>
+            <option value="restart">Restart game sequence</option>
+            <option value="custom">Custom sequence (below)</option>
+          </select>
+          <button id="controllerRunProfile" class="primary">Run action</button>
+          <span class="hint">Start/Restart use the A ×2 and Y delay above; the editor is for anything else.</span>
+        </div>
+
+        <div>
+          <div class="rpc-row" style="margin-bottom:6px">
+            <span class="clabel">Button sequence</span>
+            <button id="seqAdd" class="small">Add step</button>
+            <button id="seqSave" class="small">Save sequence</button>
+            <button id="seqReset" class="small">Reset</button>
+            <button id="seqRun" class="small primary">Run sequence</button>
+            <span id="seqStatus" class="hint"></span>
+          </div>
+          <div class="table-wrap" style="max-height:26vh">
+            <table class="seq">
+              <thead><tr><th>#</th><th>Button</th><th>Hold ms</th><th>Wait ms</th><th></th></tr></thead>
+              <tbody id="seqRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>Log</h2>
+        <div id="log"></div>
+      </section>
+      <section class="panel">
+        <h2>Result</h2>
+        <div id="detail"><span class="dim">No run yet.</span></div>
+      </section>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <code>Start</code> runs the FS acquisition, launches kaiHEN's RO replacement, and starts HEN.
+  API: <code>127.0.0.1:31338/api/state</code>
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const logEl = $('log');
+let lastSeq = 0;
+let autoScroll = true;
+
+logEl.addEventListener('scroll', () => {
+  autoScroll = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 24;
+});
+
+function classify(text) {
+  if (/NativeCommandError|CategoryInfo|FullyQualifiedErrorId|^\+ |^At [A-Z]:\\/.test(text) ||
+      /stopped bridge pid|POST ERROR: .*10054/.test(text)) return 'dim';
+  if (/error|failed|refused|timed out|crash/i.test(text)) return 'err';
+  if (/complete|ready|pong|matches|ok\b/i.test(text)) return 'ok';
+  if (/^\[gui\]|^\[rorpc\]/.test(text)) return 'gui';
+  if (/^\[(setup|save|run|auto|controller)\]/.test(text)) return 'dim';
+  return '';
+}
+
+function addLineTo(el, text, auto) {
+  const div = document.createElement('div');
+  const cls = classify(text);
+  if (cls) div.className = cls;
+  div.textContent = text;
+  el.appendChild(div);
+  while (el.childElementCount > 1500) el.removeChild(el.firstChild);
+  if (auto) el.scrollTop = el.scrollHeight;
+}
+const addLine = text => addLineTo(logEl, text, autoScroll);
+
+function acceptLine(line) {
+  if (typeof line.seq !== 'number') return;
+  if (line.seq < lastSeq) { lastSeq = 0; logEl.innerHTML = ''; }
+  if (line.seq <= lastSeq) return;
+  lastSeq = line.seq;
+  addLine(line.text);
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+}
+
+// ---- exploit state --------------------------------------------------------
+function renderState(s) {
+  if (typeof s.logSeq === 'number' && s.logSeq < lastSeq) { lastSeq = 0; logEl.innerHTML = ''; }
+  $('phase').textContent = s.phase;
+  $('phase').className = 'pill ' + s.phase;
+  $('msg').textContent = s.message || '';
+  $('console').textContent = s.console ? `${s.console}:8080 ${s.consoleUp === null ? '' : s.consoleUp ? 'up' : 'down'}` : '';
+  $('dot').className = 'dot ' + (s.consoleUp === null ? '' : s.consoleUp ? 'up' : 'down');
+  $('stage').textContent = s.stage || '';
+
+  const active = /\[(\d)\/4\]/.exec(s.stage || '');
+  if (active) {
+    const n = Number(active[1]);
+    document.querySelectorAll('.step').forEach(el => {
+      const k = Number(el.dataset.step);
+      el.className = 'step' + (k === n ? ' active' : k < n ? ' done' : '');
+    });
+  }
+
+  const prog = s.progress;
+  if (prog) {
+    $('pstage').textContent = 'Stage ' + prog.stage;
+    $('pfill').style.width = Math.max(0, Math.min(100, prog.percent)) + '%';
+    $('ppct').textContent = Math.round(prog.percent) + '%';
+    $('pdetail').textContent = [prog.label, prog.detail].filter(Boolean).join(' · ');
+  } else {
+    $('pstage').textContent = 'Stage –';
+    $('pfill').style.width = '0%';
+    $('ppct').textContent = '—';
+    $('pdetail').textContent = '';
+  }
+
+  const busy = s.phase === 'setup' || s.phase === 'running';
+  const restarting = s.phase === 'restarting';
+  $('start').disabled = busy || restarting;
+  $('restart').disabled = busy || restarting;
+  $('failed').disabled = restarting;
+  $('stop').disabled = !(busy || restarting);
+
+  const parts = [];
+  if (s.report) {
+    const r = s.report;
+    parts.push(`<dl>
+      <dt>probe</dt><dd>${escapeHtml(r.file)}</dd>
+      <dt>memory-ready</dt><dd class="${r.memoryReady ? 'good' : 'bad'}">${r.memoryReady}</dd>
+      <dt>candidates</dt><dd>strong ${r.strong} · weak ${r.weak} · stable ${r.stable}</dd>
+      <dt>cleaned up</dt><dd>${r.cleanedUp}</dd>
+      <dt>elapsed</dt><dd>${r.elapsed_s ?? '?'} s</dd>
+      ${r.error ? `<dt>error</dt><dd class="bad">${escapeHtml(r.error)}</dd>` : ''}
+      ${r.timings ? `<dt>waves</dt><dd>${r.timings.waves} · ${(r.timings.totalMs / 1000).toFixed(1)} s total</dd>
+      <dt>of which</dt><dd>workers ${(r.timings.workersMs / 1000).toFixed(1)} s · join ${(r.timings.joinMs / 1000).toFixed(1)} s · settle ${(r.timings.settleMs / 1000).toFixed(1)} s · ${r.timings.requests} RPC</dd>` : ''}
+    </dl>`);
+  }
+  if (s.pipeline && s.pipeline.stages.length) {
+    parts.push('<div class="stages">' + s.pipeline.stages.map(st => {
+      const cls = st.status === 'complete' ? 'complete' : st.status === 'failed' ? 'failed' : 'pending';
+      return `<div><span>${escapeHtml(st.name)}</span><span class="${cls}">${st.status}</span></div>`;
+    }).join('') + '</div>');
+  }
+  $('detail').innerHTML = parts.length ? parts.join('') : '<span class="dim">No run yet.</span>';
+}
+
+async function post(path, body) {
+  const init = {method: 'POST'};
+  if (body !== undefined) {
+    init.headers = {'content-type': 'application/json'};
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, init);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) addLine(`[gui] ${data.error || res.status}`);
+  return data;
+}
+
+// ---- console address ------------------------------------------------------
+async function loadConsoleHost() {
+  try {
+    const res = await fetch('/api/console-host');
+    const j = await res.json();
+    if (j.host) $('consoleIp').value = j.host;
+    if (j.override) addLine(`[gui] NS2_CONSOLE=${j.override} overrides the saved address (unset it to use the field)`);
+  } catch {}
+}
+loadConsoleHost();
+
+$('consoleSet').addEventListener('click', async () => {
+  const host = $('consoleIp').value.trim();
+  try {
+    const res = await fetch('/api/console-host', {method: 'POST',
+      headers: {'content-type': 'application/json'}, body: JSON.stringify({host})});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { addLine(`[gui] address: ${j.error || res.status}`); return; }
+    addLine(`[gui] console address saved: ${j.host} (${j.consoleUp ? 'HTTP up' : 'HTTP down'}) - press Start to restart the bridge on it`);
+  } catch (error) {
+    addLine(`[gui] address: ${error.message}`);
+  }
+});
+
+// The browser's folder picker is the only cross-platform one: the page cannot
+// read an OS path, so upload each file and let the server write it under
+// <repo>/kaihen. One file per request keeps each body small and gives the log a
+// progress line.
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+$('kaihenUpdate').addEventListener('click', () => {
+  addLine('[gui] kaiHEN update: choose the unpacked release folder ...');
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.webkitdirectory = true;
+  input.setAttribute('webkitdirectory', '');
+  input.multiple = true;
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  input.addEventListener('change', async () => {
+    const files = [...input.files];
+    input.remove();
+    if (!files.length) { addLine('[gui] kaiHEN update: no folder selected'); return; }
+    // The picker may include the selected folder's own name. Strip one shared
+    // top segment so ro/, hen/, game/, bootstrap.bin land directly in kaihen/.
+    const paths = files.map(file =>
+      (file.webkitRelativePath || file.relativePath || file.name).replace(/\\/g, '/'));
+    const top = paths[0].split('/')[0];
+    const strip = paths.every(path => path.split('/')[0] === top) &&
+      paths.some(path => path.includes('/'));
+    addLine(`[gui] kaiHEN update: ${files.length} file(s)${strip ? ' from ' + top : ''} ...`);
+    try {
+      for (let index = 0; index < files.length; index++) {
+        const path = strip ? paths[index].split('/').slice(1).join('/') : paths[index];
+        const data = toBase64(await files[index].arrayBuffer());
+        const res = await fetch('/api/kaihen/upload', {method: 'POST',
+          headers: {'content-type': 'application/json'}, body: JSON.stringify({path, data})});
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) { addLine(`[gui] kaiHEN upload failed: ${j.error || res.status}`); return; }
+        if (index === 0 || index === files.length - 1 || (index + 1) % 4 === 0)
+          addLine(`[gui] kaiHEN: ${index + 1}/${files.length} ${j.path}`);
+      }
+      const res = await fetch('/api/kaihen/validate', {method: 'POST'});
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { addLine(`[gui] kaiHEN update incomplete: ${j.error || res.status}`); return; }
+      addLine(`[gui] kaiHEN updated: ${j.files.join(', ')}`);
+    } catch (error) {
+      addLine(`[gui] kaiHEN update failed: ${error.message}`);
+    }
+  });
+  input.click();
+});
+
+$('kaihenReleases').addEventListener('click', () => {
+  window.open('https://github.com/ouncebrew/kaihen/releases', '_blank', 'noopener');
+});
+
+$('quitGui').addEventListener('click', async () => {
+  const res = await fetch('/api/quit', {method: 'POST'});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { addLine(`[gui] quit: ${data.error || res.status}`); return; }
+  addLine('[gui] GUI stopped. You can close this tab.');
+  $('phase').textContent = 'stopped';
+  $('phase').className = 'pill finished';
+});
+
+// ---- saved options --------------------------------------------------------
+const savedPresses = Number(localStorage.getItem('ns2jb.aPresses') || 2);
+$('atwice').checked = savedPresses !== 1;
+$('atwice').addEventListener('change', () => {
+  localStorage.setItem('ns2jb.aPresses', $('atwice').checked ? '2' : '1');
+});
+const savedYDelay = Number(localStorage.getItem('ns2jb.yDelay'));
+if (Number.isFinite(savedYDelay) && savedYDelay >= 0) $('ydelay').value = String(savedYDelay);
+$('ydelay').addEventListener('change', () => {
+  const value = Math.min(60000, Math.max(0, Number($('ydelay').value) || 0));
+  $('ydelay').value = String(value);
+  localStorage.setItem('ns2jb.yDelay', String(value));
+});
+$('autoRetry').checked = localStorage.getItem('ns2jb.autoRetry') === '1';
+const savedAttempts = Number(localStorage.getItem('ns2jb.autoAttempts') || 6);
+if (Number.isFinite(savedAttempts) && savedAttempts >= 1) $('autoAttempts').value = String(savedAttempts);
+$('autoRetry').addEventListener('change', () => {
+  localStorage.setItem('ns2jb.autoRetry', $('autoRetry').checked ? '1' : '0');
+});
+$('autoAttempts').addEventListener('change', () => {
+  const value = Math.min(20, Math.max(1, Number($('autoAttempts').value) || 6));
+  $('autoAttempts').value = String(value);
+  localStorage.setItem('ns2jb.autoAttempts', String(value));
+});
+const savedHold = Number(localStorage.getItem('ns2jb.holdMs') || 150);
+if (Number.isFinite(savedHold) && savedHold >= 40) $('holdMs').value = String(savedHold);
+$('holdMs').addEventListener('change', () => {
+  const value = Math.min(5000, Math.max(40, Number($('holdMs').value) || 150));
+  $('holdMs').value = String(value);
+  localStorage.setItem('ns2jb.holdMs', String(value));
+});
+
+function aPresses() { return $('atwice').checked ? 2 : 1; }
+function yDelayMs() { return Math.min(60000, Math.max(0, Number($('ydelay').value) || 0)); }
+
+$('start').addEventListener('click', () => {
+  logEl.innerHTML = '';
+  const attempts = $('autoRetry').checked
+    ? Math.min(20, Math.max(1, Number($('autoAttempts').value) || 6)) : 1;
+  localStorage.setItem('ns2jb.aPresses', String(aPresses()));
+  localStorage.setItem('ns2jb.yDelay', String(yDelayMs()));
+  post('/api/start', {attempts, aPresses: aPresses(), yDelayMs: yDelayMs()});
+});
+$('restart').addEventListener('click', () => {
+  logEl.innerHTML = '';
+  post('/api/restart-game', {aPresses: aPresses(), yDelayMs: yDelayMs()});
+});
+$('failed').addEventListener('click', () => post('/api/failed'));
+$('stop').addEventListener('click', () => post('/api/stop'));
+
+// ---- Controller ------------------------------------------------------
+const controllerStateEl = $('controllerState');
+const controllerNoteEl = $('controllerBridgeNote');
+let controllerOnline = false;
+
+async function refreshController() {
+  try {
+    const res = await fetch('/api/controller-status');
+    const j = await res.json();
+    controllerOnline = Boolean(j.ok);
+    if (j.ok) {
+      const player = j.player ? ` · P${j.player}` : '';
+      controllerStateEl.textContent = 'bridge: active' + player;
+      controllerStateEl.className = 'controllerstate up';
+      controllerNoteEl.textContent = 'Bridge active. Controller input and Start/Restart are available.';
+      controllerNoteEl.className = 'bridge-note';
+    } else {
+      controllerStateEl.textContent = 'bridge: offline';
+      controllerStateEl.className = 'controllerstate down';
+      controllerNoteEl.textContent = 'Bridge offline. Press Start to start the bridge; controller input will not work until it is active.';
+      controllerNoteEl.className = 'bridge-note bad';
+    }
+  } catch {
+    controllerOnline = false;
+    controllerStateEl.textContent = 'bridge: offline';
+    controllerStateEl.className = 'controllerstate down';
+    controllerNoteEl.textContent = 'Bridge offline. Press Start to start the bridge; controller input will not work until it is active.';
+    controllerNoteEl.className = 'bridge-note bad';
+  }
+}
+refreshController();
+setInterval(refreshController, 5000);
+
+async function sendTap(buttons, down) {
+  try {
+    const res = await fetch('/api/controller-tap', {method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({buttons, down})});
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      addLine(`[ctl] ${buttons.join('+')}: ${j.error || res.status}`);
+    }
+  } catch (error) {
+    addLine(`[ctl] ${buttons.join('+')}: ${error.message}`);
+  }
+}
+
+document.querySelectorAll('[data-button]').forEach(button => {
+  button.addEventListener('click', async () => {
+    const name = button.dataset.button;
+    button.classList.add('pressed');
+    setTimeout(() => button.classList.remove('pressed'), 160);
+    await sendTap([name], Math.max(0.04, (Number($('holdMs').value) || 150) / 1000));
+  });
+});
+
+$('controllerRelease').addEventListener('click', async () => {
+  const res = await fetch('/api/controller-stop', {method: 'POST'});
+  if (!res.ok) addLine('[ctl] release failed');
+});
+
+// ---- editable sequence ----------------------------------------------------
+const BUTTONS = ['A','B','X','Y','L','R','ZL','ZR','PLUS','MINUS','HOME','CAPTURE',
+  'DPAD_UP','DPAD_DOWN','DPAD_LEFT','DPAD_RIGHT','L_STICK','R_STICK'];
+const DEFAULT_SEQUENCE = [
+  {button: 'HOME', hold: 150, wait: 1000},
+  {button: 'HOME', hold: 150, wait: 1000},
+  {button: 'X', hold: 150, wait: 1000},
+  {button: 'A', hold: 150, wait: 1000},
+  {button: 'A', hold: 150, wait: 3000},
+  {button: 'Y', hold: 150, wait: 0},
+];
+let sequence = [];
+try { sequence = JSON.parse(localStorage.getItem('ns2jb.sequence') || 'null') || DEFAULT_SEQUENCE; }
+catch { sequence = DEFAULT_SEQUENCE; }
+if (!Array.isArray(sequence) || !sequence.length) sequence = DEFAULT_SEQUENCE;
+
+function renderSequence() {
+  const body = $('seqRows');
+  body.innerHTML = '';
+  sequence.forEach((step, index) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${index + 1}</td>
+      <td><select data-seq="button">${BUTTONS.map(b => `<option${b === step.button ? ' selected' : ''}>${b}</option>`).join('')}</select></td>
+      <td><input data-seq="hold" type="number" min="40" max="5000" step="10" value="${step.hold}"></td>
+      <td><input data-seq="wait" type="number" min="0" max="60000" step="100" value="${step.wait}"></td>
+      <td><button class="small" data-seq-up="${index}" title="Move up">↑</button>
+          <button class="small" data-seq-down="${index}" title="Move down">↓</button>
+          <button class="small" data-seq-del="${index}" title="Remove">✕</button></td>`;
+    body.appendChild(tr);
+  });
+  body.querySelectorAll('[data-seq]').forEach(el => {
+    el.addEventListener('change', () => {
+      const index = [...body.children].indexOf(el.closest('tr'));
+      const field = el.dataset.seq;
+      sequence[index][field] = field === 'button' ? el.value
+        : Math.max(field === 'hold' ? 40 : 0, Number(el.value) || 0);
+      saveSequence();
+    });
+  });
+  body.querySelectorAll('[data-seq-up]').forEach(button => button.addEventListener('click', () => {
+    const i = Number(button.dataset.seqUp);
+    if (i > 0) { [sequence[i - 1], sequence[i]] = [sequence[i], sequence[i - 1]]; saveSequence(); renderSequence(); }
+  }));
+  body.querySelectorAll('[data-seq-down]').forEach(button => button.addEventListener('click', () => {
+    const i = Number(button.dataset.seqDown);
+    if (i < sequence.length - 1) { [sequence[i + 1], sequence[i]] = [sequence[i], sequence[i + 1]]; saveSequence(); renderSequence(); }
+  }));
+  body.querySelectorAll('[data-seq-del]').forEach(button => button.addEventListener('click', () => {
+    sequence.splice(Number(button.dataset.seqDel), 1);
+    saveSequence(); renderSequence();
+  }));
+}
+
+function saveSequence() {
+  localStorage.setItem('ns2jb.sequence', JSON.stringify(sequence));
+  $('seqStatus').textContent = `saved (${sequence.length} steps)`;
+}
+$('seqAdd').addEventListener('click', () => {
+  sequence.push({button: 'A', hold: Number($('holdMs').value) || 150, wait: 500});
+  saveSequence(); renderSequence();
+});
+$('seqSave').addEventListener('click', () => saveSequence());
+$('seqReset').addEventListener('click', () => {
+  sequence = DEFAULT_SEQUENCE.map(step => ({...step}));
+  saveSequence(); renderSequence();
+});
+$('seqRun').addEventListener('click', () => runSequence(sequence));
+$('controllerRunProfile').addEventListener('click', () => {
+  const profile = $('controllerProfile').value;
+  if (profile === 'start') {
+    const seq = [];
+    for (let i = 0; i < aPresses(); i++)
+      seq.push({button: 'A', hold: Number($('holdMs').value) || 150,
+        wait: i === aPresses() - 1 ? yDelayMs() : 180});
+    seq.push({button: 'Y', hold: Number($('holdMs').value) || 150, wait: 0});
+    runSequence(seq);
+  } else if (profile === 'restart') {
+    post('/api/restart-game', {aPresses: aPresses(), yDelayMs: yDelayMs()});
+  } else {
+    runSequence(sequence);
+  }
+});
+
+async function runSequence(steps) {
+  if (!steps.length) { addLine('[ctl] sequence is empty'); return; }
+  $('seqRun').disabled = true;
+  $('controllerRunProfile').disabled = true;
+  try {
+    const res = await fetch('/api/controller-sequence', {method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({steps})});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) addLine(`[ctl] sequence: ${data.error || res.status}`);
+    else addLine(`[ctl] sequence sent (${steps.length} steps)`);
+  } catch (error) {
+    addLine(`[ctl] sequence: ${error.message}`);
+  } finally {
+    $('seqRun').disabled = false;
+    $('controllerRunProfile').disabled = false;
+  }
+}
+renderSequence();
+
+// ---- events ---------------------------------------------------------------
+const es = new EventSource('/api/events');
+es.addEventListener('state', e => renderState(JSON.parse(e.data)));
+es.addEventListener('line', e => acceptLine(JSON.parse(e.data)));
+es.onerror = () => addLine('[gui] lost connection to the controller; retrying ...');
+
+let catchingUp = false;
+async function catchUp() {
+  if (catchingUp) return;
+  catchingUp = true;
+  try {
+    let res = await fetch('/api/log?since=' + lastSeq);
+    if (!res.ok) return;
+    let j = await res.json();
+    if (typeof j.seq === 'number' && j.seq < lastSeq) {
+      lastSeq = 0; logEl.innerHTML = '';
+      res = await fetch('/api/log?since=0');
+      if (!res.ok) return;
+      j = await res.json();
+    }
+    for (const line of j.lines) acceptLine(line);
+  } catch {
+  } finally {
+    catchingUp = false;
+  }
+}
+setInterval(catchUp, 2000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) catchUp(); });
+catchUp();
+</script>
+</body>
+</html>

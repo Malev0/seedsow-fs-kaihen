@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "tick": {
+      "offset": 1274432,
+      "bytes": "20e03bd5c0035fd6"
+    },
+    "frequency": {
+      "offset": 1274480,
+      "bytes": "00009f528024a072c0035fd6"
+    },
+    "priority": {
+      "offset": 1274048,
+      "bytes": "0088c079c0035fd6"
+    }
+  }
+}
