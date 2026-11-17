@@ -504,8 +504,15 @@ async function setupBoot() {
     return `mounts check failed: ${err.message}`;
   }
 
-  const clean = await runStream('node', [path.join(TOOLS, 'save-list.cjs'), '--clean'], {prefix: '[save] '});
-  if (clean !== 0) addLine('[gui] save cleanup returned a non-zero code (continuing)');
+  // Do not open a second save mount here. `save-list --clean` perturbs the FS
+  // heap immediately before the probe and can stop the positive canary
+  // overwrite (docs/FINDINGS.md 3.5: "Opening a storage before the wave
+  // perturbs the FS heap and can stop the overwrite from changing the canary
+  // at all"). The probe removes leftover NS2_GAP_* trees itself with the save
+  // clone it already owns, so this extra cleanup is redundant as well as
+  // harmful. Run `node tools/save-list.cjs --clean` by hand only if a boot
+  // fails with insufficient save space.
+  addLine('[gui] save cleanup skipped (the probe removes NS2_GAP_* itself)');
   return null;
 }
 
@@ -641,6 +648,8 @@ async function runPipeline() {
     finishedAt: Date.now()});
   if (report) {
     addLine(`[gui] probe: ${report.file} memoryReady=${report.memoryReady} strong=${report.strong} weak=${report.weak} stable=${report.stable} cleanedUp=${report.cleanedUp} ${report.error ? 'error=' + report.error : ''}`);
+    if (/Insufficient save space/i.test(report.error || ''))
+      addLine('[gui] save is full; run "node tools/save-list.cjs --clean" once, then power-cycle and Start.');
   }
   const bad = pipeline && pipeline.stages.filter(s => s.status === 'failed').pop();
   const stage = bad ? bad.name : (henOk === false ? 'kaiHEN' : null);

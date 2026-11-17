@@ -425,40 +425,13 @@ const positiveWaveMs = Number(process.env.NS2_POSITIVE_WAVE_MS || 10000);
     report.game = {profile: game.name, contentSize: report.storageSize,
       freeSpace: report.freeSpace?.save?.bytes ?? null, minimumCacheHeld};
     console.log(JSON.stringify({stage: 'game', ...report.game}));
-    // The canary entry's offset in the save content depends on the save's
-    // directory layout. The reference save has it at 0x2340; a save with a
-    // different launcher/layout has the filler entry there instead, so the
-    // positive overwrite changes filler0 and fails with "Overwrite missed the
-    // qualified canary". Find the actual `canary` entry and use it. An explicit
-    // NS2_MARKER_OFFSET still wins, and NS2_FIELD_OFFSET still overrides the
-    // copy field separately.
-    if (!process.env.NS2_MARKER_OFFSET) {
-      const fieldOverride = Number(process.env.NS2_FIELD_OFFSET) || null;
-      const scanSize = Math.max(0x8000, cacheReadSize);
-      await s.call('memset', output, 0xa5, scanSize);
-      const scan = await s.ipc('Read the save content for the canary offset', storage, 0,
-        Buffer.concat([u64(0), u64(scanSize)]),
-        {receive: [{address: output, size: scanSize, mode: 1}]});
-      check(!scan.result, 'Save content control failed');
-      const bytes = await bulk.read(s, output, scanSize);
-      const needle = Buffer.from('canary');
-      let found = -1;
-      for (let at = 0; at + needle.length <= bytes.length; at++) {
-        if (bytes.subarray(at, at + needle.length).equals(needle)) { found = at; break; }
-      }
-      if (found > 0 && found < 0x2440) {
-        markerOffset = found;
-        report.markerOffset = found;
-        if (!fieldOverride) {
-          fieldOffset = found;
-          report.fieldOffset = found;
-        }
-        console.log(JSON.stringify({stage: 'canary-offset', offset: found}));
-      } else {
-        console.log(JSON.stringify({stage: 'canary-offset', fallback: markerOffset,
-          found}));
-      }
-    }
+    // Do not open or read extra content here. The earlier canary-offset scan
+    // read the game content (not the save's directory block), so it always
+    // logged `fallback: 9024, found: -1`, and the extra 2 MiB read before the
+    // wave perturbed the FS heap: the positive rows stopped changing any path
+    // and the first retail boot wedged a worker. The marker offset stays the
+    // measured per-save/per-boot value; NS2_MARKER_OFFSET overrides it and
+    // NS2_FIELD_OFFSET overrides the copy field separately.
     if (originalRom) check(await domain.storageSize(s, originalRom) === storageSize, 'Mounted RomFS size differs');
     async function nativeLinks(range) {
       const snapshots = [range, ...(range.fragmentation || [])];
