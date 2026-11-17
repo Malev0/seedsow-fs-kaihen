@@ -73,6 +73,33 @@ node tools/update-kaihen.cjs <folder>
 **Open kaiHEN releases** opens the release page in the browser. `kaihen/` is
 git-ignored, so replacing its contents never touches the rest of this repository.
 
+**Update kaiHEN (Auto-Download)** downloads the latest release from
+<https://github.com/ouncebrew/kaihen/releases>, extracts the ZIP into `kaihen/`,
+and deletes the ZIP. It works on Windows, Linux and macOS. This replaces the
+release files, so copy a locally patched `hen/main` or `bootstrap.bin` aside
+first if you use one.
+
+### Updating this kit
+
+**Check for updates** compares the local `version.json` with the repository. If
+a newer integer version exists, a **New update found: Vx, download?** button
+appears. Clicking it refuses while a run is active; otherwise it downloads the
+new repository, stops the GUI, replaces the kit files, keeps `kaihen/`, `runs/`,
+`env.local.txt` and `tools/console-host.txt`, updates its own updater script,
+and restarts the GUI.
+
+The command-line equivalents are:
+
+```
+node ns2-run.cjs --update-kaihen-latest
+node ns2-run.cjs --check-updates
+node ns2-run.cjs --self-update
+node ns2-run.cjs --version
+```
+
+`version.json` contains one integer (`{"version": 1}`). Bump that number when
+you publish a new version of this kit.
+
 ## Running it
 
 1. Start the controller: **`start-gui.bat`** on Windows, **`start-gui.command`**

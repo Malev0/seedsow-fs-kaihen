@@ -25,6 +25,9 @@ const PIPELINE = path.join(SWITCH2, 'pipeline.cjs');
 // The run directory is opened once per Start; until then the readers fall back
 // to the engine tree so an old status/pipeline file can still be shown.
 const {prepareRun, loadEnv} = require(path.join(TOOLS, 'env.cjs'));
+const SELF_UPDATE = require(path.join(TOOLS, 'self-update.cjs'));
+const KAIHEN_RELEASE = require(path.join(TOOLS, 'kaihen-release.cjs'));
+const VERSION = SELF_UPDATE.readVersion(ROOT).version;
 let RUN = null;
 const runRoot = () => RUN || SWITCH2;
 // Show the newest run on startup; Start opens a fresh one (prepareRun() reads
@@ -125,13 +128,20 @@ function releasePipeline(reason, ok = false) {
   return true;
 }
 
+// An update must not touch the tree while the pipeline, the bridge setup or the
+// held FS endpoint still has a child running.
+function runActive() {
+  return state.phase === 'setup' || state.phase === 'running' ||
+    state.phase === 'restarting' || pipelineHeld || Boolean(child);
+}
+
 function publicState() {
   return {
     phase: state.phase, message: state.message, consoleUp: state.consoleUp,
     stage: state.stage, stages: state.stages, report: state.report,
     pipeline: state.pipeline, progress: state.progress,
     startedAt: state.startedAt, finishedAt: state.finishedAt,
-    console: CONSOLE, logSeq: state.seq,
+    console: CONSOLE, version: VERSION, logSeq: state.seq,
   };
 }
 
@@ -867,6 +877,82 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
         addLine(`[gui] kaiHEN update incomplete: ${error.message}`);
         return send(400, JSON.stringify({ok: false, error: error.message}));
       }
+    }
+    if (req.method === 'POST' && url.pathname === '/api/kaihen/latest') {
+      if (runActive())
+        return send(409, JSON.stringify({ok: false,
+          error: 'A run is active; stop it before updating kaiHEN.'}));
+      addLine('[gui] kaiHEN: checking the latest release ...');
+      try {
+        const result = await KAIHEN_RELEASE.updateFromLatest();
+        addLine(`[gui] kaiHEN ${result.tag}: ${result.count} file(s) copied into kaihen/`);
+        return send(200, JSON.stringify({ok: true, ...result}));
+      } catch (error) {
+        addLine(`[gui] kaiHEN auto-update failed: ${error.message}`);
+        return send(500, JSON.stringify({ok: false, error: error.message}));
+      }
+    }
+    if (req.method === 'POST' && url.pathname === '/api/update/check') {
+      try {
+        const result = await SELF_UPDATE.check({root: ROOT});
+        addLine(result.update
+          ? `[gui] update available: ${result.label} (local V${result.local.version})`
+          : `[gui] up to date (V${result.local.version})`);
+        return send(200, JSON.stringify({ok: true, ...result}));
+      } catch (error) {
+        addLine(`[gui] update check failed: ${error.message}`);
+        return send(500, JSON.stringify({ok: false, error: error.message}));
+      }
+    }
+    if (req.method === 'POST' && url.pathname === '/api/update/apply') {
+      if (runActive())
+        return send(409, JSON.stringify({ok: false,
+          error: 'A run is active; stop it before updating.'}));
+      addLine('[gui] update: downloading the new repository ...');
+      let prepared;
+      try {
+        prepared = await SELF_UPDATE.prepare({root: ROOT});
+      } catch (error) {
+        addLine(`[gui] update download failed: ${error.message}`);
+        return send(500, JSON.stringify({ok: false, error: error.message}));
+      }
+      const localVersion = SELF_UPDATE.readVersion(ROOT).version;
+      if (Number(prepared.version) <= Number(localVersion)) {
+        SELF_UPDATE.cleanup(prepared);
+        addLine(`[gui] update: already up to date (V${localVersion})`);
+        return send(409, JSON.stringify({ok: false,
+          error: `already up to date (V${localVersion})`}));
+      }
+      addLine(`[gui] update V${prepared.version} downloaded; stopping the GUI ...`);
+      try {
+        await stopEverything('update: stopping the bridge before the GUI exits');
+      } catch (error) {
+        addLine(`[gui] update: bridge stop failed (continuing): ${error.message}`);
+      }
+      const helperArgs = [path.join(TOOLS, 'self-update.cjs'),
+        '--apply', prepared.dir,
+        '--temp', prepared.temp,
+        '--version', prepared.version,
+        '--commit', prepared.commit || '',
+        '--wait-pid', String(process.pid),
+        '--restart'];
+      let helper;
+      try {
+        helper = spawn(process.execPath, helperArgs, {cwd: ROOT, env: process.env,
+          detached: true, stdio: 'ignore', windowsHide: true});
+        helper.unref();
+      } catch (error) {
+        addLine(`[gui] update helper failed to start: ${error.message}`);
+        return send(500, JSON.stringify({ok: false, error: error.message}));
+      }
+      if (!helper.pid) {
+        addLine('[gui] update helper did not start');
+        return send(500, JSON.stringify({ok: false, error: 'the update helper did not start'}));
+      }
+      addLine(`[gui] update helper pid ${helper.pid}; the GUI will restart after the copy`);
+      send(200, JSON.stringify({ok: true, version: prepared.version}));
+      setTimeout(() => { try { server.close(); } catch {} process.exit(0); }, 700);
+      return;
     }
     if (req.method === 'GET' && url.pathname === '/api/state') {
       return send(200, JSON.stringify({...publicState(), logSeq: state.seq}));

@@ -186,6 +186,12 @@
 <main>
   <section id="pane-exploit" class="pane active">
     <div class="buttons">
+      <button id="kaihenAuto" class="small" title="Download the latest kaiHEN release from GitHub, extract it into <repo>/kaihen, and delete the ZIP">Update kaiHEN (Auto-Download)</button>
+      <button id="updateCheck" class="small" title="Check the Seedsow FS kaiHEN repository for a newer version">Check for updates</button>
+      <button id="updateDownload" class="small primary" style="display:none" title="Stop the GUI, download the new repository, update the folder, and restart"></button>
+      <span id="updateNote" class="hint danger"></span>
+    </div>
+    <div class="buttons">
       <button id="start">Start on this boot</button>
       <button id="failed">Attempt failed</button>
       <button id="stop">Stop run</button>
@@ -310,6 +316,7 @@
 <footer>
   <code>Start</code> runs the FS acquisition, launches kaiHEN's RO replacement, and starts HEN.
   API: <code>127.0.0.1:31338/api/state</code>
+  <span id="version" class="hint" style="margin-left:12px"></span>
 </footer>
 
 <script>
@@ -363,6 +370,7 @@ function renderState(s) {
   $('msg').textContent = s.message || '';
   $('console').textContent = s.console ? `${s.console}:8080 ${s.consoleUp === null ? '' : s.consoleUp ? 'up' : 'down'}` : '';
   $('dot').className = 'dot ' + (s.consoleUp === null ? '' : s.consoleUp ? 'up' : 'down');
+  $('version').textContent = s.version ? 'v' + s.version : '';
   $('stage').textContent = s.stage || '';
 
   const active = /\[(\d)\/4\]/.exec(s.stage || '');
@@ -510,6 +518,80 @@ $('kaihenUpdate').addEventListener('click', () => {
 
 $('kaihenReleases').addEventListener('click', () => {
   window.open('https://github.com/ouncebrew/kaihen/releases', '_blank', 'noopener');
+});
+
+$('kaihenAuto').addEventListener('click', async () => {
+  const button = $('kaihenAuto');
+  button.disabled = true;
+  addLine('[gui] kaiHEN: downloading the latest release ...');
+  try {
+    const res = await fetch('/api/kaihen/latest', {method: 'POST'});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { addLine(`[gui] kaiHEN auto-update: ${j.error || res.status}`); return; }
+    addLine(`[gui] kaiHEN ${j.tag}: ${j.count} file(s) copied into kaihen/`);
+  } catch (error) {
+    addLine(`[gui] kaiHEN auto-update failed: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('updateCheck').addEventListener('click', async () => {
+  const button = $('updateCheck');
+  const note = $('updateNote');
+  const download = $('updateDownload');
+  button.disabled = true;
+  note.textContent = '';
+  addLine('[gui] update: checking the repository ...');
+  try {
+    const res = await fetch('/api/update/check', {method: 'POST'});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { addLine(`[gui] update check: ${j.error || res.status}`); return; }
+    if (j.update) {
+      download.textContent = `New update found: V${j.remote.version}, download?`;
+      download.style.display = '';
+      addLine(`[gui] update available: V${j.remote.version} (local V${j.local.version})`);
+    } else {
+      download.style.display = 'none';
+      addLine(`[gui] update: up to date (V${j.local.version})`);
+    }
+    if (j.note) addLine(`[gui] update: ${j.note}`);
+  } catch (error) {
+    addLine(`[gui] update check failed: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('updateDownload').addEventListener('click', async () => {
+  const button = $('updateDownload');
+  const note = $('updateNote');
+  button.disabled = true;
+  note.textContent = '';
+  addLine('[gui] update: downloading the new repository ...');
+  try {
+    const res = await fetch('/api/update/apply', {method: 'POST'});
+    const j = await res.json().catch(() => ({}));
+    if (res.status === 409) {
+      const message = j.error || '';
+      note.textContent = /run is active/i.test(message)
+        ? "Can't update while a run is active."
+        : (message || 'Update refused.');
+      addLine(`[gui] update: ${message || 'refused'}`);
+      button.disabled = false;
+      return;
+    }
+    if (!res.ok) {
+      addLine(`[gui] update failed: ${j.error || res.status}`);
+      button.disabled = false;
+      return;
+    }
+    note.textContent = 'Updating; the GUI will restart.';
+    addLine(`[gui] update V${j.version} downloaded; the GUI will stop, update and restart.`);
+  } catch (error) {
+    addLine(`[gui] update failed: ${error.message}`);
+    button.disabled = false;
+  }
 });
 
 $('quitGui').addEventListener('click', async () => {

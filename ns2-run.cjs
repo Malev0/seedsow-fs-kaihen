@@ -18,6 +18,8 @@ const {spawn} = require('node:child_process');
 const {prepareRun, root} = require('./tools/env.cjs');
 const {update: updateKaihen} = require('./tools/update-kaihen.cjs');
 const {writeConsoleHost} = require('./tools/console-host.cjs');
+const kaihenRelease = require('./tools/kaihen-release.cjs');
+const selfUpdate = require('./tools/self-update.cjs');
 
 const TOOLS = path.join(root, 'tools');
 const SWITCH2 = path.join(root, 'ns2jb-main', 'ns2jb-main', 'engine', 'switch2');
@@ -28,17 +30,26 @@ const USAGE = `usage: node ns2-run.cjs [options]
   --ip <address>          save the console address to tools/console-host.txt
   --dir <folder>          use kaiHEN from <folder> instead of <repo>/kaihen
   --update-kaihen <dir>   copy <dir> over <repo>/kaihen first
+  --update-kaihen-latest  download the latest kaiHEN release into <repo>/kaihen
+  --check-updates         check this kit for a newer version
+  --self-update           download and apply the latest kit, keeping kaihen/
+  --version               print the local version
   --no-setup              skip stop-all, shim upload, mounts and bridge start
   --probe                 run the RO instruction probe instead of HEN
   -h, --help              show this text`;
 
 function parse(argv) {
-  const options = {setup: true, mode: '--hen', dir: null, update: null, ip: null};
+  const options = {setup: true, mode: '--hen', dir: null, update: null, ip: null,
+    updateKaihenLatest: false, checkUpdates: false, selfUpdate: false, version: false};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '-h' || arg === '--help') { console.log(USAGE); process.exit(0); }
     else if (arg === '--no-setup') options.setup = false;
     else if (arg === '--probe') options.mode = '--probe';
+    else if (arg === '--update-kaihen-latest') options.updateKaihenLatest = true;
+    else if (arg === '--check-updates') options.checkUpdates = true;
+    else if (arg === '--self-update') options.selfUpdate = true;
+    else if (arg === '--version') options.version = true;
     else if (arg === '--ip') {
       const value = argv[++i];
       if (!value) throw Error('--ip needs an address');
@@ -83,6 +94,39 @@ function printStages(dir) {
 
 async function main() {
   const options = parse(process.argv.slice(2));
+  if (options.version) {
+    console.log(`V${selfUpdate.readVersion(root).version}`);
+    return 0;
+  }
+  if (options.updateKaihenLatest) {
+    const result = await kaihenRelease.updateFromLatest();
+    console.log(`kaiHEN ${result.tag}: ${result.count} file(s) copied into kaihen/`);
+    return 0;
+  }
+  if (options.checkUpdates) {
+    const result = await selfUpdate.check({root});
+    console.log(result.update
+      ? `update available: ${result.label} (local V${result.local.version})`
+      : `up to date (V${result.local.version})`);
+    if (result.note) console.log(result.note);
+    return 0;
+  }
+  if (options.selfUpdate) {
+    const preparedUpdate = await selfUpdate.prepare({root});
+    try {
+      const localVersion = selfUpdate.readVersion(root).version;
+      if (Number(preparedUpdate.version) <= Number(localVersion)) {
+        console.log(`already up to date (V${localVersion})`);
+        return 0;
+      }
+      const result = selfUpdate.applyPrepared(preparedUpdate, {root});
+      console.log(`updated to V${result.version}: ${result.count} file(s); ` +
+        'kept kaihen/, runs/, env.local.txt and tools/console-host.txt');
+    } finally {
+      selfUpdate.cleanup(preparedUpdate);
+    }
+    return 0;
+  }
   if (options.update) {
     const result = updateKaihen(options.update);
     console.log(`kaihen: replaced ${result.count} files in ${result.target} from ${result.source}`);
