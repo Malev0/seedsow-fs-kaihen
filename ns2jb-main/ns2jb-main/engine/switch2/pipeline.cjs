@@ -322,8 +322,8 @@ async function main() {
       record.hold = {mode: 'types', state: 'ready', ...hold};
       await save(file, record);
       process.send({type: 'held-ready', session: a.session});
-      const reason = await require('./hold.cjs').waitForRelease();
-      record.hold = {...record.hold, state: 'releasing', reason,
+      const release = await require('./hold.cjs').waitForRelease();
+      record.hold = {...record.hold, state: 'releasing', reason: release.reason,
         released: new Date().toISOString()};
       await save(file, record);
       const cleanup = await stage('Release FS resources', () => acquisition.retire());
@@ -418,28 +418,35 @@ async function main() {
     }
     if (henMode || probeMode) {
       const handoff = await stage('Restore Loader session', () => runtime.handoff());
-      const step = henMode
+      // Do not name this `step`: it would shadow the pipeline's main-stage
+      // counter below, and assigning the 4/4 stage to a const throws.
+      const frontend = henMode
         ? await stage('Connect to the RO frontend', () => require('./ro/ready.cjs').main())
         : await stage('RO instruction challenges', () => runtime.probe(activation.pid));
       const mode = henMode ? 'hen' : 'ro-probe';
       const result = {session: a.session, pid: activation.pid, launch: launch.file,
-        handoff: handoff.file, [henMode ? 'ready' : 'probe']: step,
+        handoff: handoff.file, [henMode ? 'ready' : 'probe']: frontend,
         verified: true, restored: true};
       await save(runPath(henMode ? 'ro-frontend-current.json' : 'ro-probe-current.json'), result);
       record[mode] = result;
       await save(file, record);
+      // No parent channel means no HEN result to wait for; keep the old
+      // behaviour for a direct CLI run.
+      let henStarted = true;
       if (typeof process.send === 'function') {
         process.send({type: 'held-ready', session: a.session, mode,
           socketPath: acquisition.socketPath});
-        const reason = await require('./hold.cjs').waitForRelease();
-        record.hold = {mode, state: 'releasing', reason,
-          released: new Date().toISOString()};
+        const release = await require('./hold.cjs').waitForRelease();
+        // The GUI releases the hold only after tools/hen.cjs has returned and
+        // reports whether it succeeded. A failed HEN start must not publish 4/4.
+        henStarted = release.ok === true;
+        record.hold = {mode, state: 'releasing', reason: release.reason,
+          ok: release.ok, released: new Date().toISOString()};
         await save(file, record);
       }
-      // The GUI releases the hold only after tools/hen.cjs has returned, so
-      // reaching this point means HEN startup is complete. Publish it as the
-      // fourth main stage so the top bar shows 4/4.
-      if (henMode) {
+      // Publish a confirmed start as the fourth main stage so the top bar and
+      // status.txt show 4/4. `step` here is the module-level stage counter.
+      if (henMode && henStarted) {
         step = 4;
         await status('kaiHEN Startup Complete');
       }

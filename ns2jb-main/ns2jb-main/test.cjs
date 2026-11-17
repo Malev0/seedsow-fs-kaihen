@@ -83,7 +83,9 @@ test('held FS endpoint waits for an explicit release or parent disconnect', asyn
     const pending = waitForRelease(channel);
     if (event === 'release') channel.emit('message', {type: 'release'});
     else channel.emit('disconnect');
-    assert.equal(await pending, event === 'release' ? 'release' : 'parent-disconnected');
+    assert.deepEqual(await pending, event === 'release'
+      ? {reason: 'release', ok: true}
+      : {reason: 'parent-disconnected', ok: false});
     assert.equal(channel.listenerCount('message'), 0);
     assert.equal(channel.listenerCount('disconnect'), 0);
   }

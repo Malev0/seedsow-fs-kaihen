@@ -98,6 +98,12 @@ function computeProgress() {
     const lane = laneProgress(STAGE3_PLAN, done);
     return {stage: 3, percent: lane.percent, label: `${lane.steps}/${lane.total} RO steps`, detail: ''};
   }
+  // HEN startup happens outside the pipeline stage list (the GUI runs
+  // tools/hen.cjs), so the 4/4 status line is the completion signal. Without
+  // this the bar stayed at "1/3 HEN steps" (33%) after a successful start.
+  if (readStatusText().startsWith('[4/4]')) {
+    return {stage: 4, percent: 100, label: 'kaiHEN Startup Complete', detail: ''};
+  }
   const lane = laneProgress(STAGE4_PLAN, done);
   return {stage: 4, percent: lane.percent, label: `${lane.steps}/${lane.total} HEN steps`, detail: ''};
 }
@@ -108,10 +114,12 @@ let child = null;
 // the GUI sends it automatically once HEN has started (or failed).
 let pipelineHeld = false;
 
-function releasePipeline(reason) {
+function releasePipeline(reason, ok = false) {
   if (!pipelineHeld) return false;
   if (!child || child.connected === false) return false;
-  try { child.send({type: 'release'}); } catch { return false; }
+  // `ok` tells the pipeline whether tools/hen.cjs actually started HEN, so a
+  // failed start cannot be published as 4/4 "kaiHEN Startup Complete".
+  try { child.send({type: 'release', ok}); } catch { return false; }
   pipelineHeld = false;
   addLine(`[gui] release sent (${reason}); retiring the FS endpoint ...`);
   return true;
@@ -149,11 +157,16 @@ function addLine(text) {
   }
 }
 
-function readStatus() {
+function readStatusText() {
   try {
-    const text = fs.readFileSync(path.join(runRoot(), 'status.txt'), 'utf8').trim();
-    if (text !== state.stage) setState({stage: text});
-  } catch {}
+    // status.txt is "<line> <ISO timestamp>"; the stage chip wants the line.
+    return fs.readFileSync(path.join(runRoot(), 'status.txt'), 'utf8').trim()
+      .replace(/\s+\d{4}-\d{2}-\d{2}T[\d:.]+Z$/, '');
+  } catch { return ''; }
+}
+function readStatus() {
+  const text = readStatusText();
+  if (text && text !== state.stage) setState({stage: text});
 }
 
 function readPipeline() {
@@ -573,7 +586,7 @@ async function runPipeline() {
       pipelineHeld = true;
       if (message.mode !== 'hen') {
         addLine(`[gui] ${message.mode || 'research'} hold released automatically.`);
-        releasePipeline((message.mode || 'research') + ' hold');
+        releasePipeline((message.mode || 'research') + ' hold', false);
         return;
       }
       setState({phase: 'running', message: 'RO replacement held. Starting kaiHEN ...',
@@ -587,12 +600,12 @@ async function runPipeline() {
           : 'kaiHEN startup failed - see the log.';
         addLine(henOk ? '[gui] kaiHEN started. Press HOME, quit Seedsow, then hold R on a native game.'
           : '[gui] kaiHEN startup failed.');
-        releasePipeline(henOk ? 'kaiHEN started' : 'kaiHEN startup failed');
+        releasePipeline(henOk ? 'kaiHEN started' : 'kaiHEN startup failed', henOk);
       }).catch(error => {
         henOk = false;
         henOutcome = 'kaiHEN startup error: ' + error.message;
         addLine('[gui] HEN startup error: ' + error.message);
-        releasePipeline('HEN startup error');
+        releasePipeline('HEN startup error', false);
       });
     }
   });
@@ -619,7 +632,11 @@ async function runPipeline() {
     message = `Pipeline exited with code ${code}.`;
   }
   setState({phase: 'finished', message, pipeline, report,
-    progress: computeProgress() || state.progress,
+    // A confirmed HEN start is the end of stage 4 even if status.txt was not
+    // written; keep the bar and the stage chip consistent at 4/4.
+    progress: henOk === true
+      ? {stage: 4, percent: 100, label: 'kaiHEN Startup Complete', detail: ''}
+      : (computeProgress() || state.progress),
     ...(henOk === true ? {stage: '[4/4] kaiHEN Startup Complete'} : {}),
     finishedAt: Date.now()});
   if (report) {
@@ -931,7 +948,7 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
     }
     if (req.method === 'POST' && url.pathname === '/api/stop') {
       stopping = true;
-      if (pipelineHeld && releasePipeline('stop')) {
+      if (pipelineHeld && releasePipeline('stop', false)) {
         // Retire the held endpoint cleanly instead of killing the pipeline; the
         // pipeline exits after acquisition.retire() completes.
         setState({phase: 'running', message: 'Releasing the held endpoint ...'});
