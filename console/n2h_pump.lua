@@ -1,5 +1,5 @@
 -- Frame pump for n2h_rpc.lua, in its own file because the save upload endpoint
--- rejects bodies over 28672 bytes (http.lua REQ_CAP = 0x8000 on this save).
+-- rejects bodies over the http.lua REQ_CAP (0x8000 = 32768 on this save).
 -- Serves the RPC socket from the game's frame handler instead of a blocking
 -- loop, so the launcher can still render, suspend and close the game.
 -- Loaded by n2h_rpc.lua R.serve via loadfile("save:/n2h_pump.lua").

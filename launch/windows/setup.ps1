@@ -39,13 +39,13 @@ if (-not $consoleOk) {
 Write-Output 'console ok'
 
 Write-Output '=== re-upload/reload shim ==='
-# The save upload endpoint rejects bodies over 28672 bytes (http.lua REQ_CAP),
-# and it is the only way to put these files on the console. Fail here instead
-# of after three 6 s timeouts.
+# The save upload endpoint rejects bodies over 32768 bytes (http.lua REQ_CAP =
+# 0x8000), and it is the only way to put these files on the console. Fail here
+# instead of after three 6 s timeouts.
 foreach ($name in 'n2h_rpc.lua', 'n2h_pump.lua') {
   $size = (Get-Item (Join-Path $CONSOLE $name)).Length
-  if ($size -gt 28672) {
-    Write-Output ("$name is $size bytes; the save upload limit is 28672. Split the file.")
+  if ($size -gt 32768) {
+    Write-Output ("$name is $size bytes; the save upload limit is 32768. Split the file.")
     exit 1
   }
 }

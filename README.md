@@ -1,7 +1,7 @@
 # Seedsow FS exploit
 
 Runs kaiHEN on a retail Switch 2 by driving the FS exploit from a Seedsow
-Lullaby Demo/Full game save, then lets you launch homebrew with the usual hold-R shortcut.
+Lullaby Demo/Full Game save, then lets you launch homebrew with the usual hold-R shortcut.
 
 Tested on firmware 23.0.1.
 
@@ -9,7 +9,7 @@ Tested on firmware 23.0.1.
 
 ## What you need
 
-- A Switch 2 with **Seedsow Lullaby Demo/Full game** installed, alula's seedsow save.
+- A Switch 2 with **Seedsow Lullaby Demo/Full Game** installed, alula's seedsow save.
 - A PC on the same network as the console (wifi or ethernet), with **Node.js 20+** on `PATH` (Windows, Linux or macOS).
 - The console's SD card inserted (express or non-express).
 - A controller bridge: any program that implements the small HTTP API described
@@ -77,7 +77,7 @@ git-ignored, so replacing its contents never touches the rest of this repository
 
 1. Start the controller: **`start-gui.bat`** on Windows, **`start-gui.command`**
    on macOS, **`./start-gui.sh`** on Linux. It opens in your browser.
-2. Start **Seedsow Lullaby Demo/Full game** on the console and press **Y** when the
+2. Start **Seedsow Lullaby Demo/Full Game** on the console and press **Y** when the
    launcher asks.
 3. Press **Start** in the controller.
 4. Wait for the run to finish. When the log says **kaiHEN is running**, press

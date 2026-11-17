@@ -436,6 +436,13 @@ async function main() {
           released: new Date().toISOString()};
         await save(file, record);
       }
+      // The GUI releases the hold only after tools/hen.cjs has returned, so
+      // reaching this point means HEN startup is complete. Publish it as the
+      // fourth main stage so the top bar shows 4/4.
+      if (henMode) {
+        step = 4;
+        await status('kaiHEN Startup Complete');
+      }
       // After HEN starts, the retained endpoint is promoted and HEN owns its
       // state; retirement from here is not possible and is not a run failure.
       // Closing the app performs the teardown. Keep the stage complete so the

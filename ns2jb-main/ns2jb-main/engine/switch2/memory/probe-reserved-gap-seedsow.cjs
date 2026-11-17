@@ -58,8 +58,18 @@ async function main() {
   // Env knobs mirror the parallel Seedsow port (remote-lua-sw2) so a boot can
   // be tuned without editing this file; every default reproduces the numbers
   // that already reached memory-ready here.
-  const probeReadSize = 0x180000, markerOffset = 0x2340;
-  const fieldOffset = Number(process.env.NS2_FIELD_OFFSET || markerOffset);
+  const probeReadSize = 0x180000;
+  // The canary entry's offset in the save's directory block depends on the save
+  // layout. 0x2340 is the reference save; NS2_MARKER_OFFSET is the per-save
+  // knob for the positive overwrite, and NS2_FIELD_OFFSET overrides the copy
+  // field separately.
+  const markerOverride = Number(process.env.NS2_MARKER_OFFSET) || 0;
+  let markerOffset = markerOverride > 0 ? markerOverride : 0x2340;
+  let fieldOffset = Number(process.env.NS2_FIELD_OFFSET) || markerOffset;
+  check(Number.isSafeInteger(markerOffset) && markerOffset > 0 && markerOffset < 0x2440,
+    'NS2_MARKER_OFFSET must be inside the positive payload');
+  check(Number.isSafeInteger(fieldOffset) && fieldOffset > 0 && fieldOffset < 0x2800,
+    'NS2_FIELD_OFFSET must fit the field-copy window');
   // The pin the exploit holds is a storage opened on the game's own content, so
   // its heap cost is a property of the game, not of this port: the demo costs
   // 7440 bytes and the retail game 8224. A hardcoded value therefore fails the
@@ -97,15 +107,16 @@ async function main() {
   // 4701016744 on the retail game. Free save space does NOT separate them
   // (33.1 MB vs 33.2 MB). Unknown sizes fall back to the physical floor.
   const gameProfiles = {
-    1704516260: {name: 'demo', minimumCacheHeld: 0x2810},
+    1704516260: {name: 'demo', minimumCacheHeld: 0x2600},
     4701016744: {name: 'retail', minimumCacheHeld: 0x2600},
   };
   const cacheHeldOverride = Number(process.env.NS2_MIN_CACHE_HELD) || null;
-  // The reference successful plan accepted cache copies at 9856-10208 bytes, so
-  // 0x2810 was a margin rather than a requirement. It is also a demo-sized
-  // margin: the retail heap's classes top out at 0x27E0, so 0x2810 rejected
-  // every retail wave (0/61 in runs/switch-eDvLc) while the wave was otherwise
-  // identical. The copy is at most 0x2358 bytes, so 0x2600 still holds it.
+  // 0x2810 was a demo-only margin, not a requirement. The copy is at most
+  // 0x2358 bytes, so the general 0x2600 floor holds it. A demo console whose
+  // cache classes top out below 0x2810 (issue #3) would otherwise reject every
+  // alias copy and fail with "Combined acquisition did not obtain the clean
+  // alias"; both profiles now use 0x2600, and NS2_MIN_CACHE_HELD still
+  // overrides it for an outlier.
   let minimumCacheHeld = cacheHeldOverride || 0x2600;
   const metadataAttempts = 4, fieldCopies = 2;
   const waveAttempts = 30;
@@ -414,6 +425,40 @@ const positiveWaveMs = Number(process.env.NS2_POSITIVE_WAVE_MS || 10000);
     report.game = {profile: game.name, contentSize: report.storageSize,
       freeSpace: report.freeSpace?.save?.bytes ?? null, minimumCacheHeld};
     console.log(JSON.stringify({stage: 'game', ...report.game}));
+    // The canary entry's offset in the save content depends on the save's
+    // directory layout. The reference save has it at 0x2340; a save with a
+    // different launcher/layout has the filler entry there instead, so the
+    // positive overwrite changes filler0 and fails with "Overwrite missed the
+    // qualified canary". Find the actual `canary` entry and use it. An explicit
+    // NS2_MARKER_OFFSET still wins, and NS2_FIELD_OFFSET still overrides the
+    // copy field separately.
+    if (!process.env.NS2_MARKER_OFFSET) {
+      const fieldOverride = Number(process.env.NS2_FIELD_OFFSET) || null;
+      const scanSize = Math.max(0x8000, cacheReadSize);
+      await s.call('memset', output, 0xa5, scanSize);
+      const scan = await s.ipc('Read the save content for the canary offset', storage, 0,
+        Buffer.concat([u64(0), u64(scanSize)]),
+        {receive: [{address: output, size: scanSize, mode: 1}]});
+      check(!scan.result, 'Save content control failed');
+      const bytes = await bulk.read(s, output, scanSize);
+      const needle = Buffer.from('canary');
+      let found = -1;
+      for (let at = 0; at + needle.length <= bytes.length; at++) {
+        if (bytes.subarray(at, at + needle.length).equals(needle)) { found = at; break; }
+      }
+      if (found > 0 && found < 0x2440) {
+        markerOffset = found;
+        report.markerOffset = found;
+        if (!fieldOverride) {
+          fieldOffset = found;
+          report.fieldOffset = found;
+        }
+        console.log(JSON.stringify({stage: 'canary-offset', offset: found}));
+      } else {
+        console.log(JSON.stringify({stage: 'canary-offset', fallback: markerOffset,
+          found}));
+      }
+    }
     if (originalRom) check(await domain.storageSize(s, originalRom) === storageSize, 'Mounted RomFS size differs');
     async function nativeLinks(range) {
       const snapshots = [range, ...(range.fragmentation || [])];

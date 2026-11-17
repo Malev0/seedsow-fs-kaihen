@@ -141,7 +141,8 @@ async function connect(reportFile) {
     // A caller may pass `timeoutMs` for a probe that must fail fast (the launch
     // post-handback worker poll). It is ignored by the controller.
     const timeoutMs = Number(command.timeoutMs) > 0 ? Number(command.timeoutMs)
-      : command.command === 'root-native-file-capture' ? 15 * 60 * 1000
+      : command.command === 'root-native-file-capture' ||
+        command.command === 'root-native-file-stage' ? 15 * 60 * 1000
       : Number(process.env.NS2_MEMORY_TIMEOUT_MS) || 60000;
     const result = queue.then(() => requestOnce(socketPath, command, timeoutMs));
     queue = result.catch(() => {});

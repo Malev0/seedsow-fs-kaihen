@@ -1,5 +1,3 @@
--- Seedsow RPC shim for the ns2jb host, loaded once per process as _G.__rpc.
--- Legacy /eval helpers plus the persistent binary TCP server (R.serve).
 if _G.__rpc then return end
 local N = _G.n2h
 assert(N, "n2h missing")
@@ -33,7 +31,6 @@ local function u64(s, off) return u32(s, off) + u32(s, off + 4) * 4294967296 end
 local function u64s(v)
     v = v or 0
     local t = {}
-    -- Two's complement for negatives (2^32 made signed aux read positive).
     for i = 1, 8 do
         local q = math.floor(v / 256)
         t[i] = string.char(v - q * 256)
@@ -49,7 +46,6 @@ local function signed(v)
 end
 local function put8(s, off, val) return s:sub(1, off) .. val .. s:sub(off + 9) end
 
--- Transport buffers, allocated on first R.serve: reply built in PAY.
 local RX, PAY, RXADDR, PAYADDR, PFD, PFDADDR, OPTADDR
 local function ensureBuffers()
     if not PAY then
@@ -63,12 +59,10 @@ local function ensureBuffers()
         wr(OPTADDR, u64s(1))
     end
 end
--- Copy into the response buffer (used for reads and native output blocks).
 local function rawFrom(addr, n)
     N.call_deep(MEMCPY, PAYADDR + 24, addr, n, 0, 0)
     return n
 end
--- Copy into the read scratch area and return a Lua string (parsing only).
 local function scratch(addr, n)
     N.call_deep(MEMCPY, PAYADDR, addr, n, 0, 0)
     return PAY:sub(1, n)
@@ -148,7 +142,6 @@ function R.call_addr(addr, a0, a1, a2, a3)
     return string.format("R %.0f\nO %s", rc, hex(rd(SCRATCH + 0x4040, 0x40)))
 end
 
--- TCP RPC: 64 B request header, 24 B reply header (see the host client).
 local SOCK = {
     isinit = SDK + 0x14d930, init = SDK + 0x14d960,
     socket = SDK + 0x14d4c0, bind = SDK + 0x14d3b0, listen = SDK + 0x14d440,
@@ -164,7 +157,6 @@ local ZERO8 = string.rep("\0", 8)
 local SENTINEL = string.char(16, 50, 84, 118, 152, 186, 220, 254) -- 0xfedcba9876543210 LE
 local REGION, JOBOFF, STACK = 0x90, 0x60, 0x8000
 local PTHREAD_CREATE, PTHREAD_JOIN, PTHREAD_EXIT = SDK + 0x142180, SDK + 0x142480, SDK + 0x142410
-    -- Two's complement for negatives too (2^32 made signed aux read positive).
 local PTHREAD_ATTR_INIT, PTHREAD_ATTR_DESTROY = SDK + 0x1426c0, SDK + 0x142700
 local PTHREAD_ATTR_SETAFFINITY, PTHREAD_SETPRIO = SDK + 0x1428f0, SDK + 0x141d80
 local AVAILABLE_CORES = SDK + 0x1371e0
@@ -201,10 +193,8 @@ local function detectNonblock(fd)
     end
     return 0
 end
--- seed-rop-chain.cjs page-aligns every offset; mirror that exactly.
 local function align(n) return math.ceil(n / 4096) * 4096 end
 
--- Mirrors engine/switch2/app/seed-rop-chain.cjs.
 local function buildFrame(base, limit, calls)
     if type(calls) ~= "table" or #calls == 0 then return nil, "worker has no calls" end
     local jobs, logical = {}, {}
@@ -246,7 +236,6 @@ local function buildFrame(base, limit, calls)
         end
     end
 
-    -- One Lua string per area: a wr() per call would cost a chain call each.
     local offsets, regs, jobsData = {}, {}, {}
     for i, job in ipairs(jobs) do
         local r = string.rep("\0", REGION)
@@ -293,10 +282,8 @@ end
 
 local workers = {}
 local workerCreates = 0
--- idleDeadline lets the loop release the launcher /eval handler when idle.
 local RUN = {stop = false, conns = 0, requests = 0, idleMs = 90000, idleDeadline = 0}
 
--- Worker spec: 48 B header then 48 B per call (see buildWorker).
 local CALLREC = 48
 local function parseSpecs(b)
     local at, n = 8, u32(b, 0)
@@ -338,7 +325,6 @@ local function startWorkers(specs)
                 N.call_deep(MEMCPY, spec.snapshot, base, proof.bytes, 0, 0)
             end
             wr(slot, ZERO8 .. ZERO8)
-            -- Optional per-worker tuning: pin at creation, raise priority.
             local attr = 0
             if spec.affinity and proof.bytes <= limit - 0x100 then
                 local allowed = signed(N.call_deep(AVAILABLE_CORES, 0, 0, 0, 0, 0))
@@ -378,16 +364,16 @@ local function startWorkers(specs)
         end
     end)
     if not ok then
-        -- Already-created threads are not joined: a parked worker must not
-        -- block the RPC loop.
         for i = #workers, first + 1, -1 do workers[i] = nil end
         return nil, tostring(err)
     end
     return out
 end
 
--- A blocking pthread_join here freezes the transport if a worker is parked.
-local JOIN_WAIT_MS = 10000
+-- A slow SD card / FS can keep one worker in its request for well over 10 s;
+-- the old 10 s deadline reported a false "still running" failure. 30 s keeps
+-- the stage bounded while allowing the slow worker to finish.
+local JOIN_WAIT_MS = 30000
 local function waitForCells(w, waitMs)
     local cells = w.proof.resultOffsets
     local deadline = nowMs() + waitMs
@@ -514,14 +500,12 @@ local function dispatch(cmd, a0, a1, a2, a3, a4, payload)
         if not ok then return 1, 0, tostring(err) end
         return 0, 0, table.concat(out, "\n")
     elseif cmd == 13 then -- write a line to the game's on-screen console
-        -- print here is the launcher's overlay print, not cmd 12's capture.
         print(payload)
         return 0, 0, ""
     end
     return 1, 0, "unknown command"
 end
 
--- struct pollfd { int fd; short events; short revents; } (8 bytes), POLLIN = 1.
 local function pollIn(fd, timeoutMs)
     wr(PFDADDR, string.char(fd % 256, math.floor(fd / 256) % 256,
         math.floor(fd / 65536) % 256, math.floor(fd / 16777216) % 256, 1, 0, 0, 0))
@@ -565,8 +549,6 @@ local function sendAll(cs, addr, n, deadline)
     return true
 end
 
--- One write per reply: a header send followed by a payload send stalls ~40 ms
--- on Nagle + delayed ACK.
 local function sendReply(cs, status, aux, payload, rawLen)
     local len = rawLen or #(payload or "")
     local hdr = MAGIC4 .. u64s(status):sub(1, 4) .. u64s(len) .. u64s(aux)
@@ -575,7 +557,6 @@ local function sendReply(cs, status, aux, payload, rawLen)
     return sendAll(cs, PAYADDR, 24 + len, nowMs() + 60000)
 end
 
--- Serve one client until it ends, the run stops or the deadline passes.
 local function serveClientRequests(cs, deadline)
     while not RUN.stop do
         local got, err = recvAll(cs, RXADDR, 64, deadline)
@@ -608,7 +589,6 @@ local function serveClient(cs, deadline)
     return serveClientRequests(cs, deadline)
 end
 
--- Frame pump from n2h_pump.lua (this file stays under the 28672 B limit).
 local function loadPump()
     local chunk = loadfile("save:/n2h_pump.lua")
     if not chunk then return nil end
@@ -647,7 +627,6 @@ function R.serve(port, seconds, idleSeconds, mode)
         N.call_deep(SOCK.close, fd, 0, 0, 0, 0)
         return "ERR listen " .. errno()
     end
-    -- poll() bounds the accept wait, so a dead bridge cannot wedge /eval.
     local nb = detectNonblock(fd)
     if nb ~= 0 then fcntl(fd, 4, fcntl(fd, 3, 0) + nb) end
     RUN.stop = false
@@ -655,11 +634,8 @@ function R.serve(port, seconds, idleSeconds, mode)
     local deadline = started + seconds * 1000
     RUN.idleDeadline = started + RUN.idleMs
     local conns = 0
-    -- Serve from the frame handler; "blocking" keeps the old loop.
     if mode ~= "blocking" then
         local pump = loadPump()
-        -- A pump that cannot install must not kill the serve: fall back to the
-        -- blocking loop, which at least answers, and say why.
         local started, why = false, "no pump file"
         if pump then
             local ok, result = pcall(pump.start, fd, nb, deadline)
@@ -679,7 +655,6 @@ function R.serve(port, seconds, idleSeconds, mode)
             if cs >= 0 then
                 conns = conns + 1
                 if nb ~= 0 then fcntl(cs, 4, fcntl(cs, 3, 0) + nb) end
-                -- TCP_NODELAY (IPPROTO_TCP=6, option 1) keeps small replies prompt.
                 N.call_deep(SOCK.setsockopt, cs, 6, 1, OPTADDR, 4)
                 serveClient(cs, deadline)
                 N.call_deep(SOCK.close, cs, 0, 0, 0, 0)

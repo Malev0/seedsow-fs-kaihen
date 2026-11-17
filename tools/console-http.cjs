@@ -54,12 +54,12 @@ async function evalFile(file) {
   return request('POST', '/eval', fs.readFileSync(file));
 }
 
-// Write one file into the console's save. The save upload endpoint refuses
-// bodies over 28672 bytes, so report that clearly instead of a bare 413.
+// Write one file into the console's save. http.lua's REQ_CAP is 0x8000
+// (32,768) on this save; report an oversized body clearly instead of a bare 413.
 async function uploadSave(file, name) {
   const bytes = fs.readFileSync(file);
-  if (bytes.length > 28672)
-    throw Error(`${name} is ${bytes.length} bytes; the save upload limit is 28672`);
+  if (bytes.length > 32768)
+    throw Error(`${name} is ${bytes.length} bytes; the save upload limit is 32768`);
   return request('PUT', '/save?path=' + encodeURIComponent(name), bytes, 20000);
 }
 

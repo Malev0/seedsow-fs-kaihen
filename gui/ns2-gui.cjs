@@ -619,7 +619,9 @@ async function runPipeline() {
     message = `Pipeline exited with code ${code}.`;
   }
   setState({phase: 'finished', message, pipeline, report,
-    progress: computeProgress() || state.progress, finishedAt: Date.now()});
+    progress: computeProgress() || state.progress,
+    ...(henOk === true ? {stage: '[4/4] kaiHEN Startup Complete'} : {}),
+    finishedAt: Date.now()});
   if (report) {
     addLine(`[gui] probe: ${report.file} memoryReady=${report.memoryReady} strong=${report.strong} weak=${report.weak} stable=${report.stable} cleanedUp=${report.cleanedUp} ${report.error ? 'error=' + report.error : ''}`);
   }
