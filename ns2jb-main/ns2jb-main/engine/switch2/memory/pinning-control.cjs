@@ -19,7 +19,11 @@ function releasablePinningControl(row, pinBytes = 13616) {
 }
 
 function retryablePinningMiss(row, pinBytes) {
-  return releasablePinningControl(row, pinBytes) && row.pinningOverlapped === false;
+  // The first abort-control wave measures pinBytes itself, so the caller still
+  // holds null when it asks whether that row is retryable. Fall back to the
+  // row's own measured cost; otherwise the retry never fires on a fresh boot.
+  const expected = pinBytes == null ? row.newPersistentBytes : pinBytes;
+  return releasablePinningControl(row, expected) && row.pinningOverlapped === false;
 }
 
 async function retryPinningControl(wave, releasePin, pinBytes = 13616) {

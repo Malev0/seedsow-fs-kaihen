@@ -689,13 +689,17 @@ const positiveWaveMs = Number(process.env.NS2_POSITIVE_WAVE_MS || 10000);
       const settleAt = performance.now();
       const settle = Number(process.env.NS2_WAVE_SETTLE_MS || 0);
       // First attempts of the canary/alias families are where the measured
-      // failures live (positive wave and combined-leak batch 0). A short idle
-      // before releasing the gates gives the FS service the same quiet state a
-      // retry used to provide, without paying it on every control wave.
+      // failures live (positive wave and combined-leak batch 0). The initial
+      // abort-control wave is the same kind of first attempt: it has to create
+      // the pin inside the canary window, and on a fast link the FS service is
+      // still busy from the commit. A short idle before releasing the gates
+      // gives it the same quiet state a retry used to provide, without paying
+      // it on every control wave.
       const firstSettle = Number(process.env.NS2_FIRST_WAVE_SETTLE_MS || 500);
       // alias-probe runs before the install and must see the same quiet FS
       // state the first combined-leak copy used to get.
-      const needsFirstSettle = /positive|combined-leak|extent-present|alias-probe/.test(profile);
+      const needsFirstSettle =
+        /positive|combined-leak|extent-present|alias-probe|abort-control|abort-hole-control/.test(profile);
       const always = process.env.NS2_WAVE_SETTLE_ALWAYS === '1';
       // Measured: 29 of 49 waves settled, 29 s of 161 s wall time. Keep the full
       // delay for the first retry, then use a shorter one.
