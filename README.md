@@ -18,8 +18,8 @@ Tested on firmware 23.0.1.
 ## Setup (once)
 
 1. Copy this folder anywhere on the PC.
-2. The repository contains an empty `kaihen/` folder. Put a kaiHEN release in it
-   (see below).
+2. The repository contains an empty `kaihen/` folder. Let the kit download a
+   kaiHEN release, or put one there yourself (see below).
 3. Put the console's address in `tools/console-host.txt` (one line, e.g.
    `192.168.1.50`). If the file is missing, copy
    `tools/console-host.example.txt` and edit it, or pass `--ip` to the command
@@ -31,11 +31,32 @@ Tested on firmware 23.0.1.
 ## kaiHEN release
 
 The repository contains an empty `kaihen/` folder and does not ship kaiHEN
-itself. Download a release from
-<https://github.com/ouncebrew/kaihen/releases>, unzip it, and copy the
-**contents of the unzipped folder** into `kaihen/` — not the folder itself. The
-release zip has `bootstrap.bin`, `hbmenu.nro`, `ro/`, `hen/`, `game/`,
-`programs/` and `licenses/` at its top level.
+itself. The kit can download the latest release for you, or you can point it at
+a folder you already have.
+
+**GUI:** press **Update kaiHEN (Auto-Download)**. It downloads the latest
+release from <https://github.com/ouncebrew/kaihen/releases>, extracts the ZIP
+into `kaihen/`, and deletes the ZIP. It works on Windows, Linux and macOS.
+
+**CLI:**
+
+```
+node ns2-run.cjs --update-kaihen-latest
+```
+
+Both replace the release files, so copy a locally patched `hen/main` or
+`bootstrap.bin` aside first if you use one.
+
+If you already have an unpacked release, press **Update kaiHEN (local folder)**
+in the controller and choose the folder (the browser uploads it into `kaihen/`),
+or run:
+
+```
+node tools/update-kaihen.cjs <folder>
+```
+
+**Open kaiHEN releases** opens the release page in the browser. `kaihen/` is
+git-ignored, so replacing its contents never touches the rest of this repository.
 
 The result must be:
 
@@ -48,53 +69,20 @@ kaihen/game/main
 kaihen/programs/...
 ```
 
-Windows (PowerShell), from the repository folder:
-
-```powershell
-Expand-Archive -Path "$HOME\Downloads\kaiHEN-20261116.zip" -DestinationPath "$env:TEMP\kaihen-release" -Force
-Copy-Item "$env:TEMP\kaihen-release\*" .\kaihen\ -Recurse -Force
-```
-
-Linux / macOS, from the repository folder:
-
-```bash
-unzip ~/Downloads/kaiHEN-20261116.zip -d /tmp/kaihen-release
-cp -R /tmp/kaihen-release/. ./kaihen/
-```
-
-If the zip creates a single top-level folder, copy the contents of that folder
-instead. You can also press **Update kaiHEN (local folder)** in the controller
-and choose the unzipped folder (the browser uploads it into `kaihen/`), or run:
-
-```
-node tools/update-kaihen.cjs <folder>
-```
-
-**Open kaiHEN releases** opens the release page in the browser. `kaihen/` is
-git-ignored, so replacing its contents never touches the rest of this repository.
-
-**Update kaiHEN (Auto-Download)** downloads the latest release from
-<https://github.com/ouncebrew/kaihen/releases>, extracts the ZIP into `kaihen/`,
-and deletes the ZIP. It works on Windows, Linux and macOS. This replaces the
-release files, so copy a locally patched `hen/main` or `bootstrap.bin` aside
-first if you use one.
-
 ### Updating this kit
 
-**Check for updates** compares the local `version.json` with the repository. If
-a newer integer version exists, a **New update found: Vx, download?** button
-appears. Clicking it refuses while a run is active; otherwise it downloads the
-new repository, stops the GUI, replaces the kit files, keeps `kaihen/`, `runs/`,
-`env.local.txt` and `tools/console-host.txt`, updates its own updater script,
-and restarts the GUI.
+**GUI:** press **Check for updates**. If a newer integer version exists, a
+**New update found: Vx, download?** button appears. Clicking it refuses while a
+run is active; otherwise it downloads the new repository, stops the GUI,
+replaces the kit files, keeps `kaihen/`, `runs/`, `env.local.txt` and
+`tools/console-host.txt`, updates its own updater script, and restarts the GUI.
 
-The command-line equivalents are:
+**CLI:**
 
 ```
-node ns2-run.cjs --update-kaihen-latest
-node ns2-run.cjs --check-updates
-node ns2-run.cjs --self-update
-node ns2-run.cjs --version
+node ns2-run.cjs --check-updates   # report whether a newer version exists
+node ns2-run.cjs --self-update     # download and apply it
+node ns2-run.cjs --version         # print the local version
 ```
 
 `version.json` contains one integer (`{"version": 1}`). Bump that number when
