@@ -9,11 +9,10 @@ Tested on firmware 23.0.1.
 
 ## What you need
 
-- A Switch 2 with **Seedsow Lullaby Demo/Full Game** installed, alula's seedsow save.
+- A Switch 2 with **Seedsow Lullaby Demo/Full Game** installed, with alula's seedsow save.
 - A PC on the same network as the console (wifi or ethernet), with **Node.js 20+** on `PATH` (Windows, Linux or macOS).
 - The console's SD card inserted (express or non-express).
-- A controller bridge: any program that implements the small HTTP API described
-  below. You can use the automatic retry feature with a controller bridge.
+- Optional: A controller bridge: any program that implements the small HTTP API described below. You can use the automatic retry feature with a controller bridge.
 
 ## Setup (once)
 
@@ -95,8 +94,9 @@ you publish a new version of this kit.
 2. Start **Seedsow Lullaby Demo/Full Game** on the console and press **Y** when the
    launcher asks.
 3. Press **Start** in the controller.
+4. If a run fails, restart the app and try again. If you fail 8 times in a row, restart your console. If your console is frozen, hold the power button down for 15 seconds, then power it back on.
 4. Wait for the run to finish. When the log says **kaiHEN is running**, press
-   **HOME** on the console, quit Seedsow, and **hold R while starting a native switch 2 game. After it loads, close the game, and reopen it while holding R to access HBMenu**.
+   **HOME** on the console, quit Seedsow, and **hold R while starting a native switch 2 game. After it loads, close the game, and reopen it a second time while holding R to access HBMenu**.
 
 To stop the controller later, run **stop-gui.bat** (Windows), **stop-gui.command** (macOS) or **./stop-gui.sh** (Linux); closing the browser tab does not stop it. It stops the controller, any run it started, the bridge and the console loop.
 
