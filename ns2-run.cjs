@@ -64,6 +64,41 @@ function run(file, args, options = {}) {
   });
 }
 
+// The HEN pipeline HOLDS the retained FS endpoint open after stage 3 and waits
+// on its IPC channel for a `{type:'release'}` message; tools/hen.cjs must run
+// *during* that hold (the GUI does exactly this). A plain sequential
+// "pipeline then hen.cjs" fails, because with no IPC parent the pipeline
+// assumes HEN ran, retires the endpoint, and hen.cjs then finds it gone
+// ("A ready retained endpoint on the current boot is required"). This mirrors
+// the GUI's runPipeline(): fork the pipeline with ipc, run hen.cjs on
+// `held-ready`, then release with the real outcome.
+function runPipelineHen(env) {
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [PIPELINE, '--hen'],
+      {cwd: SWITCH2, env, stdio: ['inherit', 'inherit', 'inherit', 'ipc'], windowsHide: true});
+    let henResult = null, henStarted = false;
+    const stop = () => { try { child.kill('SIGKILL'); } catch {} };
+    process.once('SIGINT', stop);
+    child.on('message', message => {
+      if (!message || message.type !== 'held-ready') return;
+      if (message.mode !== 'hen') { try { child.send({type: 'release', ok: false}); } catch {} return; }
+      if (henStarted) return;
+      henStarted = true;
+      console.log('\nRO replacement held; starting kaiHEN ...');
+      const hen = spawn(process.execPath, [path.join(TOOLS, 'hen.cjs')],
+        {cwd: root, env, stdio: 'inherit', windowsHide: true});
+      const release = ok => { henResult = ok; try { child.send({type: 'release', ok}); } catch {} };
+      hen.on('close', code => release(code === 0));
+      hen.on('error', error => { console.error(error.message); release(false); });
+    });
+    child.on('error', error => { console.error(error.message); resolve({code: -1, henResult}); });
+    child.on('close', code => {
+      process.removeListener('SIGINT', stop);
+      resolve({code: code === null ? -1 : code, henResult});
+    });
+  });
+}
+
 function stages(dir) {
   try { return JSON.parse(fs.readFileSync(path.join(dir, 'pipeline.json'), 'utf8')).stages || []; }
   catch { return []; }
@@ -102,6 +137,13 @@ async function main() {
   const prepared = prepareRun(options.dir ? {KAIHEN_SHIP: options.dir, KAIHEN_DIR: options.dir} : {});
   const runDir = prepared.dir;
   const env = {...process.env, ...prepared.env};
+  // Mirror the GUI (gui/ns2-gui.cjs): the Seedsow run needs the Seedsow-tuned
+  // probe, which reads NS2_ALIAS_OFFSETS and tries the alias buckets. Without
+  // this, acquire.cjs falls back to memory/probe-reserved-gap.cjs, whose single
+  // hardcoded alias offset hard-crashes the console at worker launch (the race
+  // never starts). env.txt / env.local.txt can still override NS2_PROBE.
+  if (!env.NS2_PROBE)
+    env.NS2_PROBE = path.join(SWITCH2, 'memory', 'probe-reserved-gap-seedsow.cjs');
   if (options.ip) env.NS2_CONSOLE = options.ip;
   console.log(`run directory: ${runDir}`);
   if (options.dir) console.log(`kaiHEN: ${path.resolve(options.dir)}`);
@@ -116,23 +158,37 @@ async function main() {
     if (ping !== 0) { console.error('bridge ping failed'); return 1; }
   }
 
-  const pipeline = await run(process.execPath, [PIPELINE, options.mode], {cwd: SWITCH2, env});
-  const rows = stages(runDir);
-  printStages(runDir);
-  if (pipeline !== 0 || rows.some(row => row.status === 'failed')) {
-    console.error(`\nrun failed; artifacts in ${runDir}`);
-    return 1;
-  }
   if (options.mode === '--probe') {
+    const pipeline = await run(process.execPath, [PIPELINE, options.mode], {cwd: SWITCH2, env});
+    const rows = stages(runDir);
+    printStages(runDir);
+    if (pipeline !== 0 || rows.some(row => row.status === 'failed')) {
+      console.error(`\nrun failed; artifacts in ${runDir}`);
+      return 1;
+    }
     console.log(`\nRO probe complete; artifacts in ${runDir}`);
     return 0;
   }
 
-  const hen = await run(process.execPath, [path.join(TOOLS, 'hen.cjs')], {cwd: root, env});
-  console.log(hen === 0
-    ? `\nkaiHEN started. Quit the game, then hold R while launching a native game.\nartifacts: ${runDir}`
-    : `\nkaiHEN startup failed; artifacts: ${runDir}`);
-  return hen === 0 ? 0 : 1;
+  // HEN mode: run the pipeline with an IPC channel and start tools/hen.cjs while
+  // the pipeline holds the retained FS endpoint (see runPipelineHen).
+  const {code: pipelineCode, henResult} = await runPipelineHen(env);
+  const rows = stages(runDir);
+  printStages(runDir);
+  if (henResult === true) {
+    console.log(`\nkaiHEN started. Quit the game, then hold R while launching a native game.\nartifacts: ${runDir}`);
+    return 0;
+  }
+  if (henResult === false) {
+    console.error(`\nkaiHEN startup failed; artifacts: ${runDir}`);
+    return 1;
+  }
+  // The pipeline never reached the HEN hold (an earlier stage failed, e.g. the
+  // acquisition boot lottery). printStages already showed where.
+  console.error(pipelineCode !== 0 || rows.some(row => row.status === 'failed')
+    ? `\nrun failed before kaiHEN; artifacts in ${runDir}`
+    : `\nrun ended without starting kaiHEN; artifacts in ${runDir}`);
+  return 1;
 }
 
 main().then(code => { process.exitCode = code; })
