@@ -28,7 +28,11 @@ async function start() {
 
     const log = fs.createWriteStream(logFile, { flags: 'wx', mode: 0o600 });
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
-    const probeFile = process.env.NS2_PROBE || path.join(__dirname, 'memory/probe-reserved-gap.cjs');
+    // The Seedsow port is the current acquisition path. The older
+    // probe-reserved-gap.cjs is the SmileBASIC/ns2jb reference; keep it
+    // selectable through NS2_PROBE, but do not make the CLI use it by default.
+    const probeFile = process.env.NS2_PROBE ||
+      path.join(__dirname, 'memory/probe-reserved-gap-seedsow.cjs');
     const child = spawn(process.execPath, [probeFile],
       { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     child.stdout.pipe(log, { end: false }); child.stderr.pipe(log, { end: false });
