@@ -14,7 +14,7 @@
 //   node ns2-run.cjs --update-kaihen <dir> replace <repo>/kaihen, then run
 const fs = require('node:fs');
 const path = require('node:path');
-const {spawn} = require('node:child_process');
+const {spawn, spawnSync} = require('node:child_process');
 const {prepareRun, root} = require('./tools/env.cjs');
 const {update: updateKaihen} = require('./tools/update-kaihen.cjs');
 const {writeConsoleHost} = require('./tools/console-host.cjs');
@@ -24,6 +24,47 @@ const selfUpdate = require('./tools/self-update.cjs');
 const TOOLS = path.join(root, 'tools');
 const SWITCH2 = path.join(root, 'ns2jb-main', 'ns2jb-main', 'engine', 'switch2');
 const PIPELINE = path.join(SWITCH2, 'pipeline.cjs');
+
+// Children are tracked so Ctrl-C can stop the pipeline, the HEN start and the
+// bridge together. Without this a failed CLI run leaves the bridge alive and
+// the next boot's setup fails with `ERR bind 98` on the console RPC port.
+const activeChildren = new Set();
+function track(child) {
+  activeChildren.add(child);
+  child.once('close', () => activeChildren.delete(child));
+  return child;
+}
+function killTree() {
+  for (const child of activeChildren) {
+    try {
+      if (process.platform === 'win32')
+        spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {windowsHide: true});
+      else {
+        try { spawn('pkill', ['-P', String(child.pid)]); } catch {}
+        child.kill('SIGKILL');
+      }
+    } catch {}
+  }
+  activeChildren.clear();
+}
+function stopAllSync() {
+  try {
+    spawnSync(process.execPath, [path.join(TOOLS, 'rpc-tool.cjs'), 'stop-all'],
+      {cwd: root, windowsHide: true, stdio: 'ignore', timeout: 15000});
+  } catch {}
+}
+async function stopAll() {
+  console.error('cleaning up the bridge and console RPC loop ...');
+  await new Promise(resolve => {
+    const child = track(spawn(process.execPath, [path.join(TOOLS, 'rpc-tool.cjs'), 'stop-all'],
+      {cwd: root, windowsHide: true, stdio: 'ignore'}));
+    const timer = setTimeout(() => { try { child.kill(); } catch {} resolve(); }, 15000);
+    child.on('close', () => { clearTimeout(timer); resolve(); });
+    child.on('error', () => { clearTimeout(timer); resolve(); });
+  });
+}
+process.once('SIGINT', () => { killTree(); stopAllSync(); process.exit(130); });
+process.once('SIGTERM', () => { killTree(); stopAllSync(); process.exit(143); });
 
 const USAGE = `usage: node ns2-run.cjs [options]
 
@@ -67,11 +108,60 @@ function parse(argv) {
 
 function run(file, args, options = {}) {
   return new Promise(resolve => {
-    const child = spawn(file, args, {stdio: 'inherit', windowsHide: true, ...options});
-    const stop = () => { try { spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {windowsHide: true}); } catch {} };
-    process.once('SIGINT', stop);
+    const child = track(spawn(file, args, {stdio: 'inherit', windowsHide: true, ...options}));
     child.on('error', error => { console.error(error.message); resolve(-1); });
-    child.on('close', code => { process.removeListener('SIGINT', stop); resolve(code === null ? -1 : code); });
+    child.on('close', code => resolve(code === null ? -1 : code));
+  });
+}
+
+// The --hen pipeline holds the retained FS endpoint open and waits for an IPC
+// release message. Run tools/hen.cjs during that hold, then release with the
+// real outcome, exactly like the GUI. Without the IPC parent the pipeline
+// retires the endpoint first and hen.cjs fails with "A ready retained endpoint
+// on the current boot is required".
+function runPipelineHen(env) {
+  return new Promise(resolve => {
+    const child = track(spawn(process.execPath, [PIPELINE, '--hen'],
+      {cwd: SWITCH2, env, windowsHide: true, stdio: ['ignore', 'inherit', 'inherit', 'ipc']}));
+    let settled = false, held = false, henRan = false, henOk = null;
+    const finish = code => {
+      if (settled) return;
+      settled = true;
+      resolve({code: code === null ? -1 : code, henRan, henOk});
+    };
+    const release = (ok, reason) => {
+      if (!held) return;
+      held = false;
+      try { child.send({type: 'release', ok, reason}); } catch {}
+    };
+    child.on('message', message => {
+      if (message?.type !== 'held-ready') return;
+      held = true;
+      if (message.mode !== 'hen') {
+        release(false, (message.mode || 'research') + ' hold');
+        return;
+      }
+      henRan = true;
+      console.log('\nRO replacement held; starting kaiHEN ...');
+      run(process.execPath, [path.join(TOOLS, 'hen.cjs')], {cwd: root, env})
+        .then(code => {
+          henOk = code === 0;
+          console.log(henOk ? 'kaiHEN started.' : 'kaiHEN startup failed.');
+          release(henOk, henOk ? 'kaiHEN started' : 'kaiHEN startup failed');
+        })
+        .catch(error => {
+          henOk = false;
+          console.error('HEN startup error: ' + error.message);
+          release(false, 'HEN startup error: ' + error.message);
+        });
+    });
+    child.on('error', error => { console.error('pipeline spawn error: ' + error.message); finish(-1); });
+    child.on('exit', code => {
+      // If the pipeline dies while HEN is still starting, do not leave the
+      // hen.cjs child (and its console connection) running.
+      if (henRan && henOk === null) killTree();
+      setTimeout(() => finish(code), 300);
+    });
   });
 }
 
@@ -146,6 +236,14 @@ async function main() {
   const prepared = prepareRun(options.dir ? {KAIHEN_SHIP: options.dir, KAIHEN_DIR: options.dir} : {});
   const runDir = prepared.dir;
   const env = {...process.env, ...prepared.env};
+  // The GUI's working defaults. env.txt/env.local.txt (prepared.env) win; these
+  // only fill the gaps that made a stock CLI run use the generic probe or the
+  // wrong acquisition timeouts.
+  env.NS2_FAST ??= '1';
+  env.NS2_WAVE_SETTLE_MS ??= '1000';
+  env.NS2_ACQUIRE_TIMEOUT_MS ??= '2700000';
+  env.NS2_ACQUIRE_ATTEMPTS ??= '1';
+  env.NS2_PROBE ??= path.join(SWITCH2, 'memory', 'probe-reserved-gap-seedsow.cjs');
   if (options.ip) env.NS2_CONSOLE = options.ip;
   console.log(`run directory: ${runDir}`);
   if (options.dir) console.log(`kaiHEN: ${path.resolve(options.dir)}`);
@@ -155,29 +253,51 @@ async function main() {
       ? ['powershell', ['-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'launch', 'windows', 'setup.ps1')]]
       : ['bash', [path.join(root, 'launch', 'unix', 'setup.sh')]];
     const setup = await run(command, args, {cwd: root, env});
-    if (setup !== 0) { console.error('setup failed (launch/' + (process.platform === 'win32' ? 'windows' : 'unix') + ')'); return 1; }
+    if (setup !== 0) {
+      console.error('setup failed (launch/' + (process.platform === 'win32' ? 'windows' : 'unix') + ')');
+      await stopAll();
+      return 1;
+    }
     const ping = await run(process.execPath, [path.join(TOOLS, 'rpc-tool.cjs'), 'ping'], {cwd: root, env});
-    if (ping !== 0) { console.error('bridge ping failed'); return 1; }
+    if (ping !== 0) {
+      console.error('bridge ping failed');
+      await stopAll();
+      return 1;
+    }
   }
 
-  const pipeline = await run(process.execPath, [PIPELINE, options.mode], {cwd: SWITCH2, env});
-  const rows = stages(runDir);
-  printStages(runDir);
-  if (pipeline !== 0 || rows.some(row => row.status === 'failed')) {
-    console.error(`\nrun failed; artifacts in ${runDir}`);
-    return 1;
-  }
   if (options.mode === '--probe') {
+    const pipeline = await run(process.execPath, [PIPELINE, options.mode], {cwd: SWITCH2, env});
+    const rows = stages(runDir);
+    printStages(runDir);
+    if (pipeline !== 0 || rows.some(row => row.status === 'failed')) {
+      console.error(`\nrun failed; artifacts in ${runDir}\nRelaunch Seedsow, press Y, then run again.`);
+      await stopAll();
+      return 1;
+    }
     console.log(`\nRO probe complete; artifacts in ${runDir}`);
     return 0;
   }
 
-  const hen = await run(process.execPath, [path.join(TOOLS, 'hen.cjs')], {cwd: root, env});
-  console.log(hen === 0
-    ? `\nkaiHEN started. Quit the game, then hold R while launching a native game.\nartifacts: ${runDir}`
-    : `\nkaiHEN startup failed; artifacts: ${runDir}`);
-  return hen === 0 ? 0 : 1;
+  const outcome = await runPipelineHen(env);
+  const rows = stages(runDir);
+  printStages(runDir);
+  const failed = outcome.code !== 0 || rows.some(row => row.status === 'failed') ||
+    outcome.henOk !== true;
+  if (failed) {
+    if (!outcome.henRan) console.error('\nkaiHEN hand-off never started; the pipeline did not hold the FS endpoint.');
+    console.error(`\nrun failed; artifacts in ${runDir}\nRelaunch Seedsow, press Y, then run again.`);
+    await stopAll();
+    return 1;
+  }
+  console.log(`\nkaiHEN started. Quit the game, then hold R while launching a native game.\nartifacts: ${runDir}`);
+  return 0;
 }
 
 main().then(code => { process.exitCode = code; })
-  .catch(error => { console.error(error.message); process.exitCode = 1; });
+  .catch(async error => {
+    console.error(error.message);
+    killTree();
+    await stopAll();
+    process.exitCode = 1;
+  });
