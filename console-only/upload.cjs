@@ -17,7 +17,7 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const {consoleHost, writeConsoleHost} = require('../tools/console-host.cjs');
+const {consoleHost, writeConsoleHost, FILE: HOST_FILE} = require('../tools/console-host.cjs');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const LUA_DIR = path.join(__dirname, 'lua');
@@ -43,9 +43,12 @@ const FILES = [
 ];
 
 function resolveConsoleHost() {
-  const host = consoleHost();
-  if (!host) throw Error('No Switch 2 IP address. Use --host <ip>, NS2_CONSOLE, or tools/console-host.txt');
-  return host;
+  const fromEnv = (process.env.NS2_CONSOLE || '').trim();
+  let fromFile = '';
+  try { fromFile = fs.readFileSync(HOST_FILE, 'utf8').split(/\r?\n/)[0].trim(); } catch {}
+  if (!fromEnv && !fromFile)
+    throw Error('No Switch 2 IP address. Use --host <ip>, NS2_CONSOLE, or tools/console-host.txt');
+  return consoleHost();
 }
 
 function saveConsoleHost(host) {

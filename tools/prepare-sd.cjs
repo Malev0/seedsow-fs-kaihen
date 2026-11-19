@@ -107,8 +107,10 @@ async function main() {
     log('Downloaded kaiHEN ' + result.tag + ' (' + result.count + ' files).');
   }
 
-  target = path.resolve(target || pickFolder());
-  if (!target || !fs.existsSync(target) || !fs.statSync(target).isDirectory())
+  const picked = target || pickFolder();
+  if (!picked) throw Error('no folder selected');
+  target = path.resolve(picked);
+  if (!fs.existsSync(target) || !fs.statSync(target).isDirectory())
     throw Error('SD card folder not found: ' + target);
 
   copyRelease(target);
