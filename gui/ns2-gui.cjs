@@ -81,34 +81,79 @@ function laneProgress(plan, done) {
   return {steps, total: plan.length, percent: Math.round((steps / plan.length) * 100)};
 }
 
+const APP_RESTART_HINT =
+  'Relaunch Seedsow Lullaby (the app), press Y, then press Start again.';
+const CONSOLE_RESTART_HINT =
+  'If the console is frozen or the app will not relaunch, hold the power button for 15 seconds, then power it back on.';
+const SD_CARD_HINT =
+  'Ensure you have a compatible SD card inserted. Both express and non-express work. ' +
+  'If you do not have the exFAT update, then your SD card must be formatted to FAT32.';
+
+function failureHints(stage, error, beforeStage3 = false) {
+  const text = String(error || '');
+  const hints = [];
+  if (/Missing kaihen/i.test(text))
+    hints.push('The local kaiHEN release is incomplete. Press Update kaiHEN (Auto-Download), then retry.');
+  const stage3or4 = STAGE3_PLAN.includes(stage) || STAGE4_PLAN.includes(stage) ||
+    stage === 'kaiHEN';
+  if (stage3or4 ||
+      /SD filesystem open failed|SD|sdcard|card|exFAT|FAT32|package|exefs|staging|kaiHEN|HEN/i.test(text))
+    hints.push(SD_CARD_HINT);
+  if (!beforeStage3) hints.push(CONSOLE_RESTART_HINT);
+  // The app-restart line is deliberately last: it is the next action for every
+  // failed attempt, even after a console power cycle.
+  hints.push(APP_RESTART_HINT);
+  return hints;
+}
+
 function computeProgress() {
   const pipeline = readPipeline();
   const report = readReport();
   const rows = pipeline?.stages || [];
-  if (rows.some(s => s.status === 'failed')) return null;
+  const failed = rows.find(s => s.status === 'failed');
   const done = new Set(rows.filter(s => s.status === 'complete').map(s => s.name));
-
-  if (!done.has('app/map')) {
-    return {stage: 1, percent: 0, label: 'mapping the application', detail: ''};
-  }
-  if (!(report && report.memoryReady)) {
+  const stage3Started = STAGE3_PLAN.some(name => done.has(name));
+  const stage4Started = STAGE4_PLAN.some(name => done.has(name)) ||
+    done.has('Restore Loader session');
+  const stage2Progress = () => {
     const p = report?.progress;
     return {stage: 2, percent: p ? p.percent : 0,
       label: p ? p.label : 'starting the probe',
       detail: p && p.profile ? p.profile : ''};
+  };
+
+  if (failed) {
+    const name = failed.name || '';
+    const stage = stage4Started ||
+      ['Connect to the RO frontend', 'RO instruction challenges', 'HEN bootstrap'].includes(name) ? 4
+      : STAGE3_PLAN.includes(name) ? 3
+      : name === 'app/map' ? 1 : 2;
+    const lane = stage === 4 ? laneProgress(STAGE4_PLAN, done)
+      : stage === 3 ? laneProgress(STAGE3_PLAN, done)
+      : stage === 2 ? {percent: report?.progress?.percent || 0} : {percent: 0};
+    return {stage, percent: lane.percent, label: 'failed: ' + (name || 'stage ' + stage),
+      detail: failed.error || ''};
   }
-  if (!done.has('Restore Loader session')) {
+
+  if (!done.has('app/map')) {
+    return {stage: 1, percent: 0, label: 'mapping the application', detail: ''};
+  }
+  // Check the later stages before the stage-2 report. The acquisition report's
+  // memoryReady flag can still be false while the pipeline is already staging
+  // HEN, which used to leave the bar at "Stage 2 98%".
+  if (stage4Started) {
+    if (readStatusText().startsWith('[4/4]')) {
+      return {stage: 4, percent: 100, label: 'kaiHEN Startup Complete', detail: ''};
+    }
+    const lane = laneProgress(STAGE4_PLAN, done);
+    return {stage: 4, percent: lane.percent, label: `${lane.steps}/${lane.total} HEN steps`, detail: ''};
+  }
+  if (stage3Started) {
     const lane = laneProgress(STAGE3_PLAN, done);
     return {stage: 3, percent: lane.percent, label: `${lane.steps}/${lane.total} RO steps`, detail: ''};
   }
-  // HEN startup happens outside the pipeline stage list (the GUI runs
-  // tools/hen.cjs), so the 4/4 status line is the completion signal. Without
-  // this the bar stayed at "1/3 HEN steps" (33%) after a successful start.
-  if (readStatusText().startsWith('[4/4]')) {
-    return {stage: 4, percent: 100, label: 'kaiHEN Startup Complete', detail: ''};
-  }
-  const lane = laneProgress(STAGE4_PLAN, done);
-  return {stage: 4, percent: lane.percent, label: `${lane.steps}/${lane.total} HEN steps`, detail: ''};
+  if (!(report && report.memoryReady)) return stage2Progress();
+  return {stage: 3, percent: 0, label: `0/${STAGE3_PLAN.length} RO steps`, detail: ''};
 }
 const clients = new Set();
 let child = null;
@@ -578,6 +623,7 @@ async function runPipeline() {
   // Start kaiHEN's bootstrap after the pipeline has launched the RO
   // replacement and holds the retained endpoint. tools/hen.cjs maps
   // bootstrap.bin into FS; the bootstrap then starts HEN through the Loader.
+  let henDetail = null;
   async function runTool(script, args = []) {
     addLine(`[hen] $ node ${script} ${args.join(' ')}`.trim());
     return new Promise(resolve => {
@@ -586,8 +632,13 @@ async function runPipeline() {
       // there, and passing only process.env silently ignored them.
       const p = spawn('node', [path.join(TOOLS, script), ...args],
         {cwd: ROOT, windowsHide: true, env: {...env, ...(RUN ? {NS2_RUN_DIR: RUN} : {})}});
-      p.stdout.on('data', d => addLine(String(d).split(/\r?\n/).filter(Boolean).map(l => '[hen] ' + l).join('\n')));
-      p.stderr.on('data', d => addLine(String(d).split(/\r?\n/).filter(Boolean).map(l => '[hen] ' + l).join('\n')));
+      const onData = d => {
+        const lines = String(d).split(/\r?\n/).filter(Boolean);
+        if (lines.length) henDetail = lines[lines.length - 1];
+        if (lines.length) addLine(lines.map(l => '[hen] ' + l).join('\n'));
+      };
+      p.stdout.on('data', onData);
+      p.stderr.on('data', onData);
       p.on('error', error => { addLine(`[hen] spawn error: ${error.message}`); resolve(-1); });
       p.on('close', code => resolve(code === null ? -1 : code));
     });
@@ -614,7 +665,7 @@ async function runPipeline() {
         henOk = henCode === 0;
         henOutcome = henOk
           ? 'kaiHEN is running. Quit Seedsow, then hold R while launching a native game.'
-          : 'kaiHEN startup failed - see the log.';
+          : 'kaiHEN startup failed: ' + (henDetail || 'see the log.');
         addLine(henOk ? '[gui] kaiHEN started. Press HOME, quit Seedsow, then hold R on a native game.'
           : '[gui] kaiHEN startup failed.');
         releasePipeline(henOk ? 'kaiHEN started' : 'kaiHEN startup failed', henOk);
@@ -635,44 +686,50 @@ async function runPipeline() {
 
   const pipeline = readPipeline();
   const report = readReport();
+  const bad = pipeline && pipeline.stages.filter(s => s.status === 'failed').pop();
+  const stage = bad ? bad.name : (henOk === false ? 'kaiHEN' : null);
+  const failed = code !== 0 || Boolean(bad) || henOk === false;
+  // Retrying only makes sense for the boot lottery. Once stage 3 starts, the FS
+  // state is native and the app usually cannot be relaunched cleanly.
+  const beforeStage3 = Boolean(bad
+    ? ['app/map', 'FS read, write and restoration'].includes(bad.name)
+    : henOk !== false);
   let message;
   if (henOutcome) {
     message = henOutcome;
-  } else if (report && report.memoryReady && !(pipeline && pipeline.stages.some(s => s.status === 'failed'))) {
+  } else if (report && report.memoryReady && !bad) {
     message = 'Pipeline finished.';
   } else if (report && /No changedLink candidate/.test(report.error || '')) {
-    message = 'Boot rejected (no usable address plan). Relaunch Seedsow, press Y, then Start.';
-  } else if (pipeline && pipeline.stages.length) {
-    const bad = pipeline.stages.filter(s => s.status === 'failed').pop();
-    message = bad ? `Failed at ${bad.name} - see log.` : 'Pipeline finished.';
+    message = 'Boot rejected (no usable address plan).';
+  } else if (bad) {
+    message = `Failed at ${bad.name}: ${bad.error || 'see the log.'}`;
   } else {
     message = `Pipeline exited with code ${code}.`;
   }
+  const hints = failed ? failureHints(stage,
+    bad?.error || henDetail || henOutcome || report?.error || '', beforeStage3) : [];
+  if (failed) message = [message, ...hints].join('\n');
   setState({phase: 'finished', message, pipeline, report,
     // A confirmed HEN start is the end of stage 4 even if status.txt was not
     // written; keep the bar and the stage chip consistent at 4/4.
     progress: henOk === true
       ? {stage: 4, percent: 100, label: 'kaiHEN Startup Complete', detail: ''}
       : (computeProgress() || state.progress),
-    ...(henOk === true ? {stage: '[4/4] kaiHEN Startup Complete'} : {}),
+    ...(failed ? {stage: '[failed] ' + (stage || 'run')}
+      : henOk === true ? {stage: '[4/4] kaiHEN Startup Complete'} : {}),
     finishedAt: Date.now()});
   if (report) {
     addLine(`[gui] probe: ${report.file} memoryReady=${report.memoryReady} strong=${report.strong} weak=${report.weak} stable=${report.stable} cleanedUp=${report.cleanedUp} ${report.error ? 'error=' + report.error : ''}`);
     if (/Insufficient save space/i.test(report.error || ''))
       addLine('[gui] save is full; run "node tools/save-list.cjs --clean" once, then power-cycle and Start.');
   }
-  const bad = pipeline && pipeline.stages.filter(s => s.status === 'failed').pop();
-  const stage = bad ? bad.name : (henOk === false ? 'kaiHEN' : null);
-  const failed = code !== 0 || Boolean(bad) || henOk === false;
-  // Retrying only makes sense for the boot lottery. Once stage 3 starts, the FS
-  // state is native and the app usually cannot be relaunched cleanly.
-  const beforeStage3 = Boolean(bad && ['app/map', 'FS read, write and restoration'].includes(bad.name));
   if (failed) {
     const cleanup = pipeline && pipeline.failureCleanup ? 'retained state retired'
       : pipeline && pipeline.cleanupError ? 'cleanup failed: ' + String(pipeline.cleanupError).split('\n')[0]
       : 'no cleanup recorded';
     addLine(`[gui] failure cleanup: ${cleanup}`);
     addLine(`[gui] failed at ${stage || 'setup'}; boot is used up.`);
+    for (const hint of hints) addLine('[gui] ' + hint);
   } else {
     bootFresh = false;
   }
@@ -689,14 +746,16 @@ let stopping = false;
 // A failed attempt always runs the "Attempt failed" cleanup: stop the run and
 // the bridge, and mark this boot used up, so the next Start cannot reuse a
 // dirtied FS heap. Automatic runs then relaunch the app themselves.
-async function markAttemptFailed(reason) {
+async function markAttemptFailed(reason, beforeStage3 = false, stage = null, error = '') {
+  const hints = failureHints(stage, error || reason, beforeStage3);
+  const message = [reason, ...hints].join('\n');
   setState({phase: 'failed', message: `${reason} Stopping the run ...`, finishedAt: Date.now()});
   await stopEverything('attempt failed; boot marked dead');
   killTree();
   pipelineHeld = false;
   bootFresh = true;
-  setState({phase: 'failed',
-    message: `${reason} Relaunch Seedsow, press Y, then Start.`, finishedAt: Date.now()});
+  setState({phase: 'failed', message, finishedAt: Date.now()});
+  for (const hint of hints) addLine('[gui] ' + hint);
 }
 
 // Auto mode: the stage-2 acquisition is a per-boot lottery, so when a run fails
@@ -716,13 +775,14 @@ async function autoRun(options = {}) {
       const result = await startRun({keepLog: attempt > 1});
       if (stopping || result.stopped) return result;
       if (!result.ok) {
-        await markAttemptFailed(result.error ? `Setup failed: ${result.error}.` : 'Setup failed.');
+        await markAttemptFailed(result.error ? `Setup failed: ${result.error}.` : 'Setup failed.', true);
         return result;
       }
       if (!result.failed) return result;           // success
       if (!result.beforeStage3) {
-        addLine(`[auto] failed at ${result.stage || 'stage 3+'}; not restarting (needs a power-cycle)`);
-        await markAttemptFailed(`Failed at ${result.stage || 'stage 3+'}.`);
+        addLine(`[auto] failed at ${result.stage || 'stage 3+'}; not restarting automatically (stage 3+ needs a console restart)`);
+        await markAttemptFailed(`Failed at ${result.stage || 'stage 3+'}.`, false, result.stage,
+          state.report?.error || result.stage || '');
         return result;
       }
       // The acquisition needs a changedLink cache candidate; boots without one
@@ -741,7 +801,7 @@ async function autoRun(options = {}) {
       }
       if (attempt >= total) {
         addLine('[auto] out of attempts');
-        await markAttemptFailed(total > 1 ? 'Out of attempts.' : 'Attempt failed.');
+        await markAttemptFailed(total > 1 ? 'Out of attempts.' : 'Attempt failed.', true);
         return result;
       }
       addLine(`[auto] failed at ${result.stage}; restarting the app for another boot`);
@@ -749,7 +809,7 @@ async function autoRun(options = {}) {
       if (stopping || restarted.stopped) return result;
       if (!restarted.consoleUp) {
         addLine('[auto] restart did not bring the console back; stopping');
-        await markAttemptFailed('Restart did not bring the console back.');
+        await markAttemptFailed('Restart did not bring the console back.', false);
         return result;
       }
       await sleep(1500);
@@ -1061,12 +1121,9 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
       return send(200, JSON.stringify({ok: true, aPresses, yDelayMs}));
     }
     if (req.method === 'POST' && url.pathname === '/api/failed') {
-      await stopEverything('attempt marked failed; boot marked dead');
-      killTree();
-      pipelineHeld = false;
-      bootFresh = true;
-      setState({phase: 'failed', message: 'Attempt marked failed. Relaunch Seedsow, press Y, then Start.',
-        finishedAt: Date.now()});
+      const bad = state.pipeline?.stages?.find(s => s.status === 'failed');
+      await markAttemptFailed('Attempt failed.', false, bad?.name || null,
+        bad?.error || state.report?.error || '');
       return send(200, JSON.stringify({ok: true}));
     }
     if (req.method === 'POST' && url.pathname === '/api/stop') {
