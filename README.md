@@ -128,11 +128,12 @@ runs entirely inside the Seedsow launcher. The PC is only used for the
 one-time upload and for preparing the SD card.
 
 **Before uploading, use a save editor to copy alula's launcher save to another
-profile.** Upload the console-only save to the profile you normally use; keep
-the other profile as a clean fallback. The upload does not modify the stock
+profile. Upload the console-only save to that second profile; keep your main
+profile's save clean for the PC version.** The upload does not modify the stock
 `save:/core.lua`, `save:/inject.iet`, `save:/inject.lua`, or `save:/http.lua`.
 
-1. Launch Seedsow Lullaby and press **Y** at the launcher.
+1. Switch the console to the second profile, launch Seedsow Lullaby, and press
+   **Y** at the launcher.
 2. In the controller, press **Upload Console-Only Save**. The uploader verifies
    the source/wire sizes, uploads the 14 Lua modules, creates the A aliases,
    cleans `/hole`, and commits the save.

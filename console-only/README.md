@@ -12,19 +12,19 @@ runs inside the Seedsow launcher; no PC is needed after the upload.
 
 Before uploading, use a save editor (for example alula's launcher save editor)
 to copy the launcher save to **another profile**. Upload the console-only save
-to the profile you normally use, and keep the other profile as a clean
-fallback. The console-only upload writes the `save:/` tree and commits it; it
+to that second profile, and keep your main profile's save clean for the PC
+version. The console-only upload writes the `save:/` tree and commits it; it
 does not modify `save:/core.lua`, `save:/inject.iet`, `save:/inject.lua`, or
 `save:/http.lua`.
 
 ## Upload
 
-1. Launch Seedsow Lullaby.
-2. Press **Y** at the launcher to start its HTTP server on port 8080.
-3. In the kit's controller, press **Upload Console-Only Save**.
-4. Wait for the uploader to print the per-file checks, upload the 14 modules,
+1. Switch the console to the second profile, launch Seedsow Lullaby, and press
+   **Y** at the launcher to start its HTTP server on port 8080.
+2. In the kit's controller, press **Upload Console-Only Save**.
+3. Wait for the uploader to print the per-file checks, upload the 14 modules,
    create the A aliases, clean `/hole`, and report `commit_rc=0x0`.
-5. Relaunch Seedsow Lullaby.
+4. Relaunch Seedsow Lullaby.
 
 The uploader verifies each file's source size (32,000 bytes) and wire size
 (32,768 bytes, the kit's `http.lua` cap) before writing. It uses the same
