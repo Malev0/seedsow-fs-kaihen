@@ -878,6 +878,34 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
         return send(400, JSON.stringify({ok: false, error: error.message}));
       }
     }
+    if (req.method === 'POST' && url.pathname === '/api/console-only-upload') {
+      if (runActive())
+        return send(409, JSON.stringify({ok: false,
+          error: 'A run is active; stop it before uploading the console-only save.'}));
+      addLine('[gui] console-only upload: press Y at the Seedsow launcher first.');
+      try {
+        const code = await runStream('node', [path.join(ROOT, 'console-only', 'upload.cjs')],
+          {cwd: ROOT, env: {...process.env, NS2_CONSOLE: CONSOLE}, prefix: '[console] '});
+        return send(code === 0 ? 200 : 500, JSON.stringify({ok: code === 0, code}));
+      } catch (error) {
+        addLine(`[gui] console-only upload failed: ${error.message}`);
+        return send(500, JSON.stringify({ok: false, error: error.message}));
+      }
+    }
+    if (req.method === 'POST' && url.pathname === '/api/prepare-sd') {
+      if (runActive())
+        return send(409, JSON.stringify({ok: false,
+          error: 'A run is active; stop it before preparing the SD card.'}));
+      addLine('[gui] Prepare SD: choose the SD card root in the folder dialog ...');
+      try {
+        const code = await runStream('node', [path.join(TOOLS, 'prepare-sd.cjs')],
+          {cwd: ROOT, env: {...process.env}, prefix: '[sd] '});
+        return send(code === 0 ? 200 : 500, JSON.stringify({ok: code === 0, code}));
+      } catch (error) {
+        addLine(`[gui] Prepare SD failed: ${error.message}`);
+        return send(500, JSON.stringify({ok: false, error: error.message}));
+      }
+    }
     if (req.method === 'POST' && url.pathname === '/api/kaihen/latest') {
       if (runActive())
         return send(409, JSON.stringify({ok: false,

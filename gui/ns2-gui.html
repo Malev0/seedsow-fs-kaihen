@@ -192,6 +192,10 @@
       <span id="updateNote" class="hint danger"></span>
     </div>
     <div class="buttons">
+      <button id="consoleOnlyUpload" class="small" title="Upload the console-only (semi-untethered) Lua save. Press Y at the Seedsow launcher first so its HTTP server is running.">Upload Console-Only Save</button>
+      <button id="prepareSd" class="small" title="Download kaiHEN if needed, then copy the release files to the SD card root you select.">Prepare SD</button>
+    </div>
+    <div class="buttons">
       <button id="start">Start on this boot</button>
       <button id="failed">Attempt failed</button>
       <button id="stop">Stop run</button>
@@ -531,6 +535,38 @@ $('kaihenAuto').addEventListener('click', async () => {
     addLine(`[gui] kaiHEN ${j.tag}: ${j.count} file(s) copied into kaihen/`);
   } catch (error) {
     addLine(`[gui] kaiHEN auto-update failed: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('consoleOnlyUpload').addEventListener('click', async () => {
+  const button = $('consoleOnlyUpload');
+  button.disabled = true;
+  addLine('[gui] console-only upload: press Y at the Seedsow launcher first; uploading ...');
+  try {
+    const res = await fetch('/api/console-only-upload', {method: 'POST'});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j.ok === false) addLine(`[gui] console-only upload failed: ${j.error || j.code || res.status}`);
+    else addLine('[gui] console-only upload complete; relaunch Seedsow and press A.');
+  } catch (error) {
+    addLine(`[gui] console-only upload failed: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('prepareSd').addEventListener('click', async () => {
+  const button = $('prepareSd');
+  button.disabled = true;
+  addLine('[gui] Prepare SD: choose the SD card root in the folder dialog ...');
+  try {
+    const res = await fetch('/api/prepare-sd', {method: 'POST'});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j.ok === false) addLine(`[gui] Prepare SD failed: ${j.error || j.code || res.status}`);
+    else addLine('[gui] SD card prepared.');
+  } catch (error) {
+    addLine(`[gui] Prepare SD failed: ${error.message}`);
   } finally {
     button.disabled = false;
   }

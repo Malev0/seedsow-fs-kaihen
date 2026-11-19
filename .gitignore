@@ -121,5 +121,3 @@ node_modules/
 __pycache__/
 *.pyc
 
-# Console-only Artemis port (local development, not shipped yet)
-console-only/

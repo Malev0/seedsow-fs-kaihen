@@ -5,6 +5,12 @@ Lullaby Demo/Full Game save, then lets you launch homebrew with the usual hold-R
 
 Tested on firmware 23.0.1.
 
+> [!WARNING]
+> **Brick risk.** Both the PC-driven version and the console-only
+> (semi-untethered) version exercise the FS exploit and have the potential to
+> **brick your Switch**. Back up the launcher save to another profile before
+> using the console-only save, and use everything here at your own risk.
+
 ---
 
 ## What you need
@@ -114,6 +120,54 @@ The controller panel sends button presses (A, B, X, Y, D-pad, sticks, HOME,
 CAPTURE, …), runs saved button sequences and has **Release all** to drop queued
 presses.
 
+## Console-only (semi-untethered) save
+
+The console-only chain from
+[rushinz/seedsow-semi-untethered](https://github.com/rushinz/seedsow-semi-untethered)
+runs entirely inside the Seedsow launcher. The PC is only used for the
+one-time upload and for preparing the SD card.
+
+**Before uploading, use a save editor to copy alula's launcher save to another
+profile.** Upload the console-only save to the profile you normally use; keep
+the other profile as a clean fallback. The upload does not modify the stock
+`save:/core.lua`, `save:/inject.iet`, `save:/inject.lua`, or `save:/http.lua`.
+
+1. Launch Seedsow Lullaby and press **Y** at the launcher.
+2. In the controller, press **Upload Console-Only Save**. The uploader verifies
+   the source/wire sizes, uploads the 14 Lua modules, creates the A aliases,
+   cleans `/hole`, and commits the save.
+3. Relaunch Seedsow Lullaby.
+4. Press **A** at the launcher (`exploita2.lua` → `s2_main.lua`) and wait for:
+
+   ```text
+   KH: === READY! Close Seedsow Lullaby and hold R while launching a game ===
+   ```
+
+5. Close Seedsow and hold **R** while launching a game to open hbmenu.
+
+The launcher update keeps **Y : HTTP server (port 8080)**, so the normal PC flow
+still works with the console-only save installed: launch Seedsow, press **Y**,
+then press **Start** in the controller.
+
+### Prepare SD
+
+The console-only chain reads kaiHEN from the SD card. Press **Prepare SD** in
+the controller and choose the SD card's root folder. If `kaihen/` is missing,
+the kit downloads the latest release first, then copies:
+
+```text
+<SD>/hbmenu.nro
+<SD>/kaihen/bin/bootstrap.bin
+<SD>/kaihen/bin/ro/main
+<SD>/kaihen/bin/hen/main
+<SD>/kaihen/bin/game/main
+<SD>/switch/*.nro
+<SD>/kaihen/...              (mirror of the local kaihen folder)
+```
+
+Existing files with the same names are replaced. The full console-only
+instructions are in [`console-only/README.md`](console-only/README.md).
+
 ## Command line
 
 The same run can be started without the browser:
@@ -151,6 +205,7 @@ timing rules and a complete example bridge.
 
 - [alula/switch-artemis-launcher](https://github.com/alula/switch-artemis-launcher) - the Seedsow launcher save this runs on
 - [kurumuz](https://github.com/kurumuz) - kaiHEN, ns2jb fork
+- [rushinz/seedsow-semi-untethered](https://github.com/rushinz/seedsow-semi-untethered) - the standalone on-console Lua port used by the console-only save
 - [manupear](https://github.com/manupear) - contributing to this projects development
 - [McGlowSticks](https://github.com/McGlowSticks) - contributing to the development of this project
 - [aveao](https://github.com/aveao) - contributing to the development of this project
