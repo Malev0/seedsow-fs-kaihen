@@ -94,10 +94,9 @@ function failureHints(stage, error, beforeStage3 = false) {
   const hints = [];
   if (/Missing kaihen/i.test(text))
     hints.push('The local kaiHEN release is incomplete. Press Update kaiHEN (Auto-Download), then retry.');
-  const stage3or4 = STAGE3_PLAN.includes(stage) || STAGE4_PLAN.includes(stage) ||
-    stage === 'kaiHEN';
-  if (stage3or4 ||
-      /SD filesystem open failed|SD|sdcard|card|exFAT|FAT32|package|exefs|staging|kaiHEN|HEN/i.test(text))
+  // Only show the SD-card hint for actual SD failures. A generic stage 3/4
+  // error does not mean the card is the problem.
+  if (/SD filesystem open failed|SD card|sdcard|exFAT|FAT32/i.test(text))
     hints.push(SD_CARD_HINT);
   if (!beforeStage3) hints.push(CONSOLE_RESTART_HINT);
   // The app-restart line is deliberately last: it is the next action for every
