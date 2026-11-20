@@ -17,7 +17,7 @@ Tested on firmware 23.0.1.
 
 - A Switch 2 with **Seedsow Lullaby Demo/Full Game** installed, with alula's seedsow save.
 - A PC on the same network as the console (wifi or ethernet), with **Node.js 20+** on `PATH` (Windows, Linux or macOS).
-- The console's SD card inserted (express or non-express).
+- The console's SD card inserted (express or non-express, if you have the exFAT update you can use fat32 or exFAT, if not use fat32).
 - Optional: A controller bridge: any program that implements the small HTTP API described below. You can use the automatic retry feature with a controller bridge.
 
 ## Setup (once)
