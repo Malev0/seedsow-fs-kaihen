@@ -155,7 +155,7 @@ then press **Start** in the controller.
 ### Prepare SD
 
 The console-only chain reads kaiHEN from the SD card. Press **Prepare SD** in
-the controller and choose the SD card's root folder. If `kaihen/` is missing,
+the controller and choose the SD card's root folder. Sd card must be inserted in your pc to do this. If `kaihen/` is missing,
 the kit downloads the latest release first, then copies:
 
 ```text
