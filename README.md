@@ -136,7 +136,9 @@ profile's save clean for the PC version.** The upload does not modify the stock
    **Y** at the launcher.
 2. In the controller, press **Upload Console-Only Save**. The uploader verifies
    the source/wire sizes, uploads the 14 Lua modules, creates the A aliases,
-   cleans `/hole`, and commits the save.
+   cleans `/hole`, and commits the save. From a terminal, the same upload is
+   `node console-only/upload.cjs --host <console-ip>` (or `--ip`); without an
+   address it uses `NS2_CONSOLE` or `tools/console-host.txt`.
 3. Relaunch Seedsow Lullaby.
 4. Press **A** at the launcher (`exploita2.lua` → `s2_main.lua`) and wait for:
 

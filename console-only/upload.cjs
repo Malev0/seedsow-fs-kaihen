@@ -14,6 +14,9 @@
 //   node console-only/upload.cjs --host 192.168.1.50
 //   node console-only/upload.cjs --ip 192.168.1.50
 //   node console-only/upload.cjs
+//
+// Without --host/--ip the address comes from NS2_CONSOLE or
+// tools/console-host.txt. Press Y at the Seedsow launcher first.
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -108,16 +111,39 @@ function checkFiles() {
   }
 }
 
+const USAGE = `usage: node console-only/upload.cjs [options]
+
+  --host <address>   upload to this Switch 2 address (saved to tools/console-host.txt)
+  --ip <address>     alias for --host
+  --check            verify the Lua files without uploading
+  -h, --help         show this text
+
+Without --host/--ip, the address comes from NS2_CONSOLE or
+tools/console-host.txt. Press Y at the Seedsow launcher first so its HTTP
+server is running on port 8080.`;
+
 async function main() {
   const argv = process.argv.slice(2);
-  for (const flag of ['--host', '--ip']) {
-    const idx = argv.indexOf(flag);
-    if (idx >= 0 && argv[idx + 1]) {
-      process.env.NS2_CONSOLE = saveConsoleHost(argv[idx + 1]);
+  let check = false;
+  let hostArg = null;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '-h' || arg === '--help') {
+      console.log(USAGE);
+      return;
+    } else if (arg === '--check') {
+      check = true;
+    } else if (arg === '--host' || arg === '--ip') {
+      const value = argv[++i];
+      if (!value) throw Error(arg + ' needs an address');
+      hostArg = value;
+    } else {
+      throw Error('unknown argument: ' + arg + ' (use --help)');
     }
   }
+  if (hostArg) process.env.NS2_CONSOLE = saveConsoleHost(hostArg);
   checkFiles();
-  if (argv.includes('--check')) {
+  if (check) {
     console.log('All files verified under both source (32,000) and this kit\'s HTTP (32,768) caps.');
     return;
   }

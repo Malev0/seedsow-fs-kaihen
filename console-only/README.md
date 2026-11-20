@@ -30,6 +30,20 @@ The uploader verifies each file's source size (32,000 bytes) and wire size
 (32,768 bytes, the kit's `http.lua` cap) before writing. It uses the same
 `PUT /save` and commit sequence as the reference.
 
+### Command line
+
+The same upload works without the controller:
+
+```text
+node console-only/upload.cjs --host <console-ip>
+node console-only/upload.cjs --ip <console-ip>      (alias)
+node console-only/upload.cjs --check                (verify files only)
+```
+
+Without `--host`/`--ip`, the address comes from `NS2_CONSOLE` or
+`tools/console-host.txt`. `--host` also saves the address to
+`tools/console-host.txt` for later runs. Press **Y** at the launcher first.
+
 ## Run
 
 1. Launch Seedsow Lullaby.
