@@ -27,8 +27,10 @@ does not modify `save:/core.lua`, `save:/inject.iet`, `save:/inject.lua`, or
 4. Relaunch Seedsow Lullaby.
 
 The uploader verifies each file's source size (32,000 bytes) and wire size
-(32,768 bytes, the kit's `http.lua` cap) before writing. It uses the same
-`PUT /save` and commit sequence as the reference.
+(under 28,600 bytes, below the stock launcher `http.lua` 28,672-byte body
+cap) before writing. Larger modules have their comments and indentation
+stripped on the wire; line numbers are preserved. It uses the same `PUT /save`
+and commit sequence as the reference.
 
 ### Command line
 

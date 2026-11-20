@@ -26,7 +26,10 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const LUA_DIR = path.join(__dirname, 'lua');
 
 const UPLOAD_CAP = 32000; // source cap
-const WIRE_CAP = 32768;   // this kit's http.lua REQ_CAP (0x8000)
+// The upload runs against the stock launcher's http.lua, whose BODY_CAP is
+// 0x7000 (28,672) on current saves. Stay just under it, like the reference
+// uploader; comment/indent stripping brings the larger modules under the cap.
+const WIRE_CAP = 28600;
 
 const FILES = [
   's2_rt.lua',
@@ -144,7 +147,7 @@ async function main() {
   if (hostArg) process.env.NS2_CONSOLE = saveConsoleHost(hostArg);
   checkFiles();
   if (check) {
-    console.log('All files verified under both source (32,000) and this kit\'s HTTP (32,768) caps.');
+    console.log('All files verified under the source (32,000) and stock-launcher wire (28,600) caps.');
     return;
   }
   const host = resolveConsoleHost();
