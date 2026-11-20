@@ -123,7 +123,7 @@ presses.
 ## Console-only (semi-untethered) save
 
 The console-only chain from
-[rushinz/seedsow-semi-untethered](https://github.com/rushinz/seedsow-semi-untethered)
+[rushinz/seedsow-semi-untethered](https://gitlab.com/rushinz/seedsow-semi-untethered)
 runs entirely inside the Seedsow launcher. The PC is only used for the
 one-time upload and for preparing the SD card.
 
@@ -208,7 +208,7 @@ timing rules and a complete example bridge.
 
 - [alula/switch-artemis-launcher](https://github.com/alula/switch-artemis-launcher) - the Seedsow launcher save this runs on
 - [kurumuz](https://github.com/kurumuz) - kaiHEN, ns2jb fork
-- [rushinz/seedsow-semi-untethered](https://github.com/rushinz/seedsow-semi-untethered) - the standalone on-console Lua port used by the console-only save
+- [rushinz/seedsow-semi-untethered](https://gitlab.com/rushinz/seedsow-semi-untethered) - the standalone on-console Lua port used by the console-only save
 - [manupear](https://github.com/manupear) - contributing to this projects development
 - [McGlowSticks](https://github.com/McGlowSticks) - contributing to the development of this project
 - [aveao](https://github.com/aveao) - contributing to the development of this project

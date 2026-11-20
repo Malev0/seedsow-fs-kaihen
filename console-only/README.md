@@ -1,7 +1,7 @@
 # Console-only (semi-untethered) save
 
 This folder is the standalone on-console Lua port from
-[rushinz/seedsow-semi-untethered](https://github.com/rushinz/seedsow-semi-untethered),
+[rushinz/seedsow-semi-untethered](https://gitlab.com/rushinz/seedsow-semi-untethered),
 adapted to the kit's launcher save. Once the save is uploaded, the whole chain
 runs inside the Seedsow launcher; no PC is needed after the upload.
 
