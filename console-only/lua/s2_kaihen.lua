@@ -23,11 +23,12 @@ M.HEN_TITLE_STR = str_char(0x3a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04)
 
 M.SD_MANIFEST = {
     bootstrap = {path = "/kaihen/bin/bootstrap.bin", size = 27948, optional = false},
-    ro        = {path = "/kaihen/bin/ro/main",       size = 23854, optional = false},
-    hen       = {path = "/kaihen/bin/hen/main",      size = 78765, optional = false},
-    game      = {path = "/kaihen/bin/game/main",     size = 63424, optional = false},
-    hbmenu    = {path = "/hbmenu.nro",               size = 11790974, optional = true},
-    programs  = {path = "/switch/ounceshell/ounceshell.nro", size = 22294859, optional = true},
+    ro        = {path = "/kaihen/bin/ro/main",       size = 29198, optional = false},
+    hen       = {path = "/kaihen/bin/hen/main",      size = 78763, optional = false},
+    game      = {path = "/kaihen/bin/game/main",     size = 71761, optional = false},
+    hbmenu    = {path = "/hbmenu.nro",               size = 11852414, optional = true},
+    programs  = {path = "/switch/ounceshell.nro",    size = 22352203, optional = true},
+    lib       = {path = "/kaihen/lib/libounce.so.1", size = 2351104, optional = true},
 }
 
 -- ---------------------------------------------------------------------------
@@ -282,12 +283,13 @@ function M.run_kaihen(rt, fs, log_fn)
         local missing = find_missing()
         if #missing > 0 then
             local rel_sources = {
-                bootstrap = {src = "bootstrap.bin", dir = false},
-                ro        = {src = "ro",            dir = true},
-                hen       = {src = "hen",           dir = true},
-                game      = {src = "game",          dir = true},
-                hbmenu    = {src = "hbmenu.nro",    dir = false},
-                programs  = {src = "programs/ounceshell.nro", dir = false},
+                bootstrap = {"bootstrap.bin"},
+                ro        = {"ro"},
+                hen       = {"sdcard/kaihen/bin/hen/main", "hen"},
+                game      = {"sdcard/kaihen/bin/game/main", "game"},
+                hbmenu    = {"sdcard/hbmenu.nro", "hbmenu.nro"},
+                programs  = {"sdcard/switch/ounceshell.nro", "programs/ounceshell.nro"},
+                lib       = {"sdcard/kaihen/lib", "lib"},
             }
             local cand_roots = {"", "/kaihen"}
             local root_list = fs.ipc_list_directory(sdh, "/", 3)
@@ -301,16 +303,21 @@ function M.run_kaihen(rt, fs, log_fn)
                 if bp.transport == 0 and bp.result == 0 then
                     fs.ipc_create_directory(sdh, "/kaihen")
                     fs.ipc_create_directory(sdh, "/kaihen/bin")
+                    fs.ipc_create_directory(sdh, "/kaihen/lib")
                     fs.ipc_create_directory(sdh, "/switch")
-                    fs.ipc_create_directory(sdh, "/switch/ounceshell")
                     for _, mname in ipairs(missing) do
-                        local rs = rel_sources[mname]
+                        local srcs = rel_sources[mname]
                         local dst = M.SD_MANIFEST[mname].path
-                        if rs and dst then
-                            local from_p = cand_root .. "/" .. rs.src
-                            local sp = fs.ipc_get_entry_type(sdh, from_p, 0x301)
-                            if sp.transport == 0 and sp.result == 0 then
-                                if rs.dir then
+                        if srcs and dst then
+                            local from_p
+                            for _, src in ipairs(srcs) do
+                                local p = cand_root .. "/" .. src
+                                local sp = fs.ipc_get_entry_type(sdh, p, 0x301)
+                                if sp.transport == 0 and sp.result == 0 then from_p = p; break end
+                            end
+                            if from_p then
+                                local sp = fs.ipc_get_entry_type(sdh, from_p, 0x301)
+                                if sp.type == 0 then
                                     local dst_dir = dst:match("^(.*)/[^/]+$")
                                     rt.wr_str(slots.path, from_p)
                                     rt.wr_str(slots.info, dst_dir)

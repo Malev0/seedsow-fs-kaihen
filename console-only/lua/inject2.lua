@@ -175,7 +175,7 @@ local function launcher_main()
 	print(" Press a button on the controller to launch:")
 	print(" A : Run semi-untethered kaiHEN (exploita2.lua)")
 	print(" B : Slot 2 (exploitb.lua)")
-	print(" Y : HTTP server (port 8080)")
+	print(" Y : HTTP server (cpypwn :8080)")
 	print("==============================================")
 
 	if _G.n2h_was_recovery then

@@ -397,14 +397,9 @@ function W.attach(M)
             fs.close_reservation_group(group, not wres.releaseWasSent, setup.pktBuf)
 
             local rec = {
-                wave         = attempt,
-                profile      = profile,
-                window       = wres.window,
-                shape        = wres.shape,
-                shapeMissing = wres.shapeMissing,
-                marginUs     = wres.marginUs,
-                rejections   = wres.rejections,
-                roleTimings  = wres.roleTimings,
+                wave = attempt, profile = profile, window = wres.window, shape = wres.shape,
+                shapeMissing = wres.shapeMissing, marginUs = wres.marginUs,
+                rejections = wres.rejections, roleTimings = wres.roleTimings,
             }
             state.waveRecords[#state.waveRecords + 1] = rec
             if profile == "positive" then
@@ -422,8 +417,7 @@ function W.attach(M)
                 else
                     if state.pinHandle ~= 0 then
                         rt.close_handle(state.pinHandle)
-                        state.pinHandle = 0
-                        setup.handles.pinHandle = 0
+                        state.pinHandle, setup.handles.pinHandle = 0, 0
                     end
                     next_profile = "abort-control"
                 end
@@ -436,7 +430,10 @@ function W.attach(M)
             elseif profile == "negative" then
                 if wres.negativeControl then next_profile = "positive" end
             elseif profile == "positive" then
-                if wres.canaryRedirect then state.canaryQualified = true end
+                if wres.canaryRedirect then state.canaryQualified = true
+                elseif not wres.triggerAborted and wres.shape < 10 then
+                    state.workerStateSafe = false; break
+                end
             end
         end
 
@@ -611,11 +608,8 @@ function W.attach(M)
                     M.configure_payload(rt, setup, config, step.bytes)
 
                     local group = campaign_state.pendingGroup
-                    if group then
-                        campaign_state.pendingGroup = nil
-                    else
-                        group = fs.open_reservation_group(setup.handles.rootSession, setup.pktBuf, 59)
-                    end
+                    if group then campaign_state.pendingGroup = nil
+                    else group = fs.open_reservation_group(setup.handles.rootSession, setup.pktBuf, 59) end
                     if not group.ok then return {ok = false, wavesTotal = waves_total} end
 
                     rt.wr(setup.REQ[10], P.domain_close_object(group.outer))
@@ -632,6 +626,10 @@ function W.attach(M)
 
                     local wres = M.analyze_wave(rt, fs, setup, config, stage_name, wave, group, false, campaign_state)
                     fs.close_reservation_group(group, not wres.releaseWasSent, setup.pktBuf)
+                    if not wres.triggerAborted and wres.shape < 10 then
+                        campaign_state.workerStateSafe = false
+                        return {ok = false, wavesTotal = waves_total}
+                    end
 
                     if wres.window and wres.preReleaseUsed and
                        wres.preReleaseUsed >= config.FIELD_MINIMUM_CACHE_HELD and

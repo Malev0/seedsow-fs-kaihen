@@ -451,11 +451,15 @@ function S.attach(M)
                         local r0 = fs.ipc_storage_read(handles.storageHandle, check_off, 16, vbuf)
                         exp_hex = (r0.error == 0) and P.hex(rt.rd(vbuf, 16)) or ""
                     end
-                    rt.memset(vbuf, 0xA5, 16)
-                    local r1 = fs.ipc_storage_read(handles.candidateHandle, check_off, 16, vbuf)
-                    local hex1 = (r1.error == 0) and P.hex(rt.rd(vbuf, 16)) or ""
-                    if exp_hex == "" or hex1 ~= exp_hex then
+                    if fs.ipc_storage_invalidate(handles.candidateHandle, 0, config.STORAGE_SIZE or 0x40000000) ~= 0 then
                         safe_to_retry = false
+                    else
+                        rt.memset(vbuf, 0xA5, 16)
+                        local r1 = fs.ipc_storage_read(handles.candidateHandle, check_off, 16, vbuf)
+                        local hex1 = (r1.error == 0) and P.hex(rt.rd(vbuf, 16)) or ""
+                        if exp_hex == "" or hex1 ~= exp_hex then
+                            safe_to_retry = false
+                        end
                     end
                 end
             end

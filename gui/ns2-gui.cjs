@@ -927,9 +927,12 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
     }
     if (req.method === 'POST' && url.pathname === '/api/kaihen/validate') {
       try {
-        const {checkDir, required} = require(path.join(TOOLS, 'update-kaihen.cjs'));
+        const {checkDir} = require(path.join(TOOLS, 'update-kaihen.cjs'));
         checkDir(KAIHEN);
-        const files = required.filter(rel => fs.statSync(path.join(KAIHEN, rel), {throwIfNoEntry: false})?.isFile());
+        const files = ['bootstrap.bin', 'ro/main'];
+        if (fs.statSync(path.join(KAIHEN, 'sdcard'), {throwIfNoEntry: false})?.isDirectory())
+          files.push('sdcard/');
+        else files.push('hbmenu.nro', 'hen/main', 'game/main');
         addLine(`[gui] kaiHEN updated: ${files.join(', ')}`);
         return send(200, JSON.stringify({ok: true, dir: KAIHEN, files}));
       } catch (error) {

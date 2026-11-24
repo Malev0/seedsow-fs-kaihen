@@ -9,7 +9,8 @@
 //
 // Requires:
 //   - a held FS endpoint with the kaiHEN RO replacement running (pipeline --hen)
-//   - the compiled kaiHEN release in <repo>/kaihen
+//   - the compiled kaiHEN release in <repo>/kaihen (bootstrap.bin and ro/main,
+//     plus either sdcard/ for 20261123+ or the flat hbmenu/hen/game layout)
 //   - an SD card inserted (HEN stages /kaihen, /switch and /hbmenu.nro there)
 const fs = require('node:fs');
 const path = require('node:path');
@@ -61,6 +62,25 @@ async function probe() {
   return result;
 }
 
+// kaiHEN releases from 20261123 ship an sdcard/ folder that mirrors the card.
+// Older releases keep the flat layout (hen/, game/, hbmenu.nro, programs/).
+function sdcardLayout(root) {
+  const sdcard = path.join(root, 'sdcard');
+  if (!fs.statSync(sdcard, {throwIfNoEntry: false})?.isDirectory()) return null;
+  const files = [];
+  const walk = (dir, prefix) => {
+    for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
+      if (entry.name.startsWith('.')) continue;
+      const child = path.join(dir, entry.name);
+      const target = `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) walk(child, target);
+      else if (entry.isFile()) files.push({source: child, target});
+    }
+  };
+  walk(sdcard, '');
+  return {root: sdcard, files};
+}
+
 async function main() {
   // A close-path bisect boot stops the pipeline early on purpose; the controller
   // still runs this tool afterwards, so make it a no-op.
@@ -68,20 +88,43 @@ async function main() {
     console.log('HEN skipped (NS2_HEN_SKIP=1)');
     return;
   }
-  for (const file of ['ro/main', 'hen/main', 'game/main', 'bootstrap.bin', 'hbmenu.nro']) {
+  for (const file of ['ro/main', 'bootstrap.bin']) {
     if (!fs.statSync(ship(file), {throwIfNoEntry: false})?.isFile())
       throw Error('Missing kaihen/' + file);
   }
-  process.env.HBMENU_NRO = ship('hbmenu.nro');
-  const programs = fs.readdirSync(ship('programs'), {withFileTypes: true})
-    .filter(entry => entry.isFile() && !entry.name.startsWith('.'))
-    .map(entry => ({source: ship('programs', entry.name), target: `/switch/${entry.name}`}));
+  let henPath, gamePath, menuPath, programs;
+  const sdcard = sdcardLayout(SHIP);
+  if (sdcard) {
+    henPath = path.join(sdcard.root, 'kaihen', 'bin', 'hen', 'main');
+    gamePath = path.join(sdcard.root, 'kaihen', 'bin', 'game', 'main');
+    menuPath = path.join(sdcard.root, 'hbmenu.nro');
+    for (const file of [henPath, gamePath]) {
+      if (!fs.statSync(file, {throwIfNoEntry: false})?.isFile())
+        throw Error('Missing kaihen/sdcard/' +
+          path.relative(sdcard.root, file).split(path.sep).join('/'));
+    }
+    const skip = new Set([henPath, gamePath, menuPath]);
+    programs = sdcard.files.filter(file => !skip.has(file.source));
+  } else {
+    for (const file of ['hen/main', 'game/main', 'hbmenu.nro']) {
+      if (!fs.statSync(ship(file), {throwIfNoEntry: false})?.isFile())
+        throw Error('Missing kaihen/' + file);
+    }
+    henPath = ship('hen', 'main');
+    gamePath = ship('game', 'main');
+    menuPath = ship('hbmenu.nro');
+    programs = fs.readdirSync(ship('programs'), {withFileTypes: true})
+      .filter(entry => entry.isFile() && !entry.name.startsWith('.'))
+      .map(entry => ({source: ship('programs', entry.name), target: `/switch/${entry.name}`}));
+  }
+  if (fs.statSync(menuPath, {throwIfNoEntry: false})?.isFile())
+    process.env.HBMENU_NRO = menuPath;
+  else delete process.env.HBMENU_NRO;
 
   console.log('Staging HEN to SD and starting it through ldr:ro...');
   // The fourth main stage of a HEN boot; the pipeline covers 1-3.
   announce('[ns2jb] stage 4: HEN');
-  const started = await startHen(ship('hen', 'main'), ship('bootstrap.bin'),
-    ship('game', 'main'), programs);
+  const started = await startHen(henPath, ship('bootstrap.bin'), gamePath, programs);
   console.log(JSON.stringify({started, ship: SHIP}, null, 2));
   // The console RPC loop is still running here - the detach below is what stops
   // it - so this is the last moment a banner can reach the screen. If the retire
@@ -192,4 +235,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = {main, probe, detachConsole};
+module.exports = {main, probe, detachConsole, sdcardLayout};

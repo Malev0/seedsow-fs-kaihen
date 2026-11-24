@@ -2,25 +2,22 @@
 // Download the latest kaiHEN release ZIP, extract it, copy the release into
 // <repo>/kaihen, and remove the temporary ZIP.
 //
-// The release layout is the one kaiHEN ships (bootstrap.bin, hbmenu.nro,
-// ro/main, hen/main, game/main, programs/, licenses/). A release is allowed to
-// wrap that in one top-level folder; findReleaseRoot() handles both.
+// kaiHEN 20261123+ ships bootstrap.bin and ro/main plus an sdcard/ folder that
+// mirrors the card. Older releases have the flat layout (hbmenu.nro, ro/main,
+// hen/main, game/main, programs/, licenses/). A release is allowed to wrap
+// either layout in one top-level folder; findReleaseRoot() handles both.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {download, getJson, extract} = require('./zip.cjs');
-const {update, required} = require('./update-kaihen.cjs');
+const {update, isRelease} = require('./update-kaihen.cjs');
 
 const OWNER = 'ouncebrew';
 const REPO = 'kaihen';
 const API = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
 
 function hasRelease(dir) {
-  return required.every(rel => {
-    try {
-      return fs.statSync(path.join(dir, rel), {throwIfNoEntry: false})?.isFile();
-    } catch { return false; }
-  });
+  try { return isRelease(dir); } catch { return false; }
 }
 
 function findReleaseRoot(directory) {
@@ -32,7 +29,7 @@ function findReleaseRoot(directory) {
       if (entry.isDirectory()) queue.push(path.join(dir, entry.name));
     }
   }
-  throw Error('the kaiHEN release ZIP does not contain bootstrap.bin, hbmenu.nro, ro/main, hen/main and game/main');
+  throw Error('the kaiHEN release ZIP has no bootstrap.bin + ro/main with an sdcard/ folder or the flat layout');
 }
 
 async function latest() {

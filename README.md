@@ -49,8 +49,9 @@ into `kaihen/`, and deletes the ZIP. It works on Windows, Linux and macOS.
 node ns2-run.cjs --update-kaihen-latest
 ```
 
-Both replace the release files, so copy a locally patched `hen/main` or
-`bootstrap.bin` aside first if you use one.
+Both replace the release files, so copy any local changes aside first. The kit
+no longer needs the old local `bootstrap.bin` patch: kaiHEN 20261123 already
+polls the mount gate, and the kit appends its host-side try-wait adapter.
 
 If you already have an unpacked release, press **Update kaiHEN (local folder)**
 in the controller and choose the folder (the browser uploads it into `kaihen/`),
@@ -63,16 +64,28 @@ node tools/update-kaihen.cjs <folder>
 **Open kaiHEN releases** opens the release page in the browser. `kaihen/` is
 git-ignored, so replacing its contents never touches the rest of this repository.
 
-The result must be:
+kaiHEN **20261123** and newer ship an `sdcard/` folder that mirrors the card:
 
 ```text
 kaihen/bootstrap.bin
-kaihen/hbmenu.nro
 kaihen/ro/main
-kaihen/hen/main
-kaihen/game/main
-kaihen/programs/...
+kaihen/sdcard/hbmenu.nro
+kaihen/sdcard/kaihen/bin/hen/main
+kaihen/sdcard/kaihen/bin/game/main
+kaihen/sdcard/kaihen/lib/*.so*
+kaihen/sdcard/switch/ounceshell.nro
+kaihen/licenses/...
 ```
+
+The kit stages every file under `sdcard/` to the same path on the card. Older
+flat releases (`hbmenu.nro`, `hen/main`, `game/main`, `programs/`) are still
+accepted. The `kaihen/lib` shared libraries are required by dynamically linked
+homebrew.
+
+kaiHEN 20261123 needs ns2jb from **24 November 2026 (commit `ae33da1`) or
+later**, which copies the release's `sdcard/` folder. This kit implements that
+staging itself, so a separate ns2jb checkout is not needed; if you use upstream
+ns2jb directly, update it to `ae33da1` or later.
 
 ### Updating this kit
 
@@ -160,16 +173,21 @@ the kit downloads the latest release first, then copies:
 
 ```text
 <SD>/hbmenu.nro
-<SD>/kaihen/bin/bootstrap.bin
-<SD>/kaihen/bin/ro/main
 <SD>/kaihen/bin/hen/main
 <SD>/kaihen/bin/game/main
-<SD>/switch/*.nro
-<SD>/kaihen/...              (mirror of the local kaihen folder)
+<SD>/kaihen/lib/*.so*          (libounce, libstdc++, Vulkan, OpenGL)
+<SD>/switch/ounceshell.nro
+<SD>/kaihen/bin/ro/main        (from the release root)
+<SD>/kaihen/bin/bootstrap.bin  (from the release root)
+<SD>/kaihen/licenses/...
 ```
 
-Existing files with the same names are replaced. The full console-only
-instructions are in [`console-only/README.md`](console-only/README.md).
+For kaiHEN **20261123** and newer, the kit copies the release's `sdcard/`
+folder to the card root and then adds `ro/main` and `bootstrap.bin` under
+`/kaihen/bin`. Older flat releases are still copied to the older layout. The
+`kaihen/lib` libraries are required by dynamically linked homebrew. Existing
+files with the same names are replaced. The full console-only instructions are
+in [`console-only/README.md`](console-only/README.md).
 
 ## Command line
 

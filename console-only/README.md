@@ -58,6 +58,14 @@ Without `--host`/`--ip`, the address comes from `NS2_CONSOLE` or
 
 4. Close Seedsow Lullaby and hold **R** while launching a game to open hbmenu.
 
+> **Seedsow Lua Editor saves:** load the launcher slot, close the game, reopen
+> it, load the slot again, and only then press **A**. Pressing **A** on the
+> first launch can freeze.
+>
+> If the log says `STOP: ... restart the Switch`, power-cycle the console
+> before trying again. That message means the attempt cleanup could not verify
+> that a retry is safe.
+
 Holding **MINUS** before **Y** still starts the stock HTTP server; the stock
 save files are untouched.
 
@@ -74,28 +82,52 @@ launcher save. It does not remove the console-only files.
 
 ## Prepare SD
 
-The console-only chain needs the kaiHEN release on the SD card. In the
-controller, press **Prepare SD**, then choose the SD card's root folder. The
-kit downloads the latest kaiHEN release into its local `kaihen/` folder if it
-is missing, then copies:
+The console-only chain needs kaiHEN on the SD card. In the controller, press
+**Prepare SD**, then choose the SD card's root folder. The kit downloads the
+latest kaiHEN release into its local `kaihen/` folder if it is missing.
+
+kaiHEN **20261123** and newer ship an `sdcard/` folder that mirrors the card.
+The kit copies its contents to the SD root, then adds the two files the
+console-only port reads from `/kaihen/bin`:
 
 ```text
 <SD>/hbmenu.nro
-<SD>/kaihen/bin/bootstrap.bin
-<SD>/kaihen/bin/ro/main
 <SD>/kaihen/bin/hen/main
 <SD>/kaihen/bin/game/main
-<SD>/switch/*.nro
-<SD>/kaihen/...              (mirror of the local kaihen folder)
+<SD>/kaihen/lib/*.so*          (libounce, libstdc++, Vulkan, OpenGL)
+<SD>/switch/ounceshell.nro
+<SD>/kaihen/bin/ro/main        (from the release root)
+<SD>/kaihen/bin/bootstrap.bin  (from the release root)
+<SD>/kaihen/licenses/...
 ```
 
-Existing files with the same names are replaced.
+Older flat kaiHEN releases are still copied to the older layout. Existing
+files with the same names are replaced.
+
+If you set up the card by hand, extract the release ZIP to the SD card root
+(the console-only port moves `ro/`, `bootstrap.bin` and the contents of
+`sdcard/` into place on the first run), or copy the contents of `sdcard/` to
+the root and put `ro/main` and `bootstrap.bin` in `/kaihen/bin/`.
+
+The shared libraries in `kaihen/lib` are required by dynamically linked
+homebrew. The kit stages the release's `sdcard/` folder itself, so the PC flow
+does not need a separate ns2jb checkout; the bundled engine already handles
+the retained FS staging. If you update kaiHEN by hand, copy the release's
+`sdcard/` folder to the card root as well as `ro/main` and `bootstrap.bin` to
+`/kaihen/bin/`.
+
+If a program does not start, kaiHEN shows a number:
+
+- `2346-0200` – the program needs a newer kaiHEN; update kaiHEN.
+- `2346-0201` – a shared library is missing; copy the release's `sdcard/` folder.
+- `2346-0202` … `2346-0204` – a library does not match the program; copy `sdcard/` again.
+- `2346-0205` – a library in `sdmc:/kaihen/preload` could not be loaded; remove it.
 
 ## Files
 
 ```text
-lua/                the 14 reference modules (unmodified except the launcher
-                    menu's cpypwn text)
+lua/                the 14 reference modules (latest rushinz port; s2_kaihen.lua
+                    is updated for the kaiHEN 20261123 sdcard/ layout)
 upload.cjs          uploader / size verifier for the launcher HTTP server
 LICENSE             GPL v2.0 (reference project)
 LICENSE-CivSwitchFS CivSwitchFS MIT notice

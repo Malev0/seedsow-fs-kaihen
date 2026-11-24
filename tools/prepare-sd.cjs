@@ -4,12 +4,23 @@
 //
 // Downloads the latest kaiHEN release into <repo>/kaihen if it is missing, asks
 // for the SD card root with the native folder picker, then copies the release
-// there, replacing files with the same names:
+// there, replacing files with the same names.
 //
+// kaiHEN 20261123+ ships an sdcard/ folder that mirrors the card:
+//   <SD>/hbmenu.nro
+//   <SD>/kaihen/bin/hen/main
+//   <SD>/kaihen/bin/game/main
+//   <SD>/kaihen/lib/*.so*
+//   <SD>/switch/ounceshell.nro
+//   <SD>/kaihen/bin/ro/main        (from the release root)
+//   <SD>/kaihen/bin/bootstrap.bin  (from the release root)
+//   <SD>/kaihen/licenses/...
+//
+// Older flat releases are copied to the older layout:
 //   <SD>/hbmenu.nro
 //   <SD>/kaihen/bin/{bootstrap.bin,ro/main,hen/main,game/main}
 //   <SD>/switch/*.nro
-//   <SD>/kaihen/...            (mirror of <repo>/kaihen)
+//   <SD>/kaihen/...                (mirror of <repo>/kaihen)
 //
 // Usage:
 //   node tools/prepare-sd.cjs                 (native folder picker)
@@ -73,7 +84,19 @@ function copyTree(source, target) {
 
 function copyRelease(target) {
   log('Copying kaiHEN to ' + target + ' ...');
-  // Mirror the local kaihen folder, then place the documented SD layout too.
+  // kaiHEN 20261123+ ships sdcard/ already laid out as the card: the menu,
+  // kaiHEN, the game loader, the shared libraries and the programs.
+  const sdcard = path.join(KAIHEN, 'sdcard');
+  if (fs.existsSync(sdcard)) {
+    copyTree(sdcard, target);
+    // The console-only port reads these two from /kaihen/bin.
+    copyFile(path.join(KAIHEN, 'ro', 'main'), path.join(target, 'kaihen', 'bin', 'ro', 'main'));
+    copyFile(path.join(KAIHEN, 'bootstrap.bin'), path.join(target, 'kaihen', 'bin', 'bootstrap.bin'));
+    copyTree(path.join(KAIHEN, 'licenses'), path.join(target, 'kaihen', 'licenses'));
+    return;
+  }
+  // Older flat release: mirror the local kaihen folder, then place the
+  // documented SD layout too.
   copyTree(KAIHEN, path.join(target, 'kaihen'));
   copyFile(path.join(KAIHEN, 'hbmenu.nro'), path.join(target, 'hbmenu.nro'));
   for (const relative of ['bootstrap.bin', 'ro/main', 'hen/main', 'game/main'])

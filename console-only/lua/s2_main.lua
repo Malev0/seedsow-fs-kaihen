@@ -306,14 +306,14 @@ function M.run(opts)
                 break
             end
             if not res.safeToRetry then
-                buf_log("STOP: attempt cleanup could not verify retry safety; restart the game")
+                buf_log("STOP: attempt cleanup could not verify retry safety; restart the Switch")
                 flush_logs(rt, fs)
                 return {ok = false, unsafeToRetry = true, logs = log_lines}
             end
             if attempt < max_attempts then
                 rt.wait_ms(RETRY_PAUSE_MS)
             else
-                buf_log("STOP: reached max attempts (" .. max_attempts .. ") without promotion; restart the game")
+                buf_log("STOP: reached max attempts (" .. max_attempts .. ") without promotion; restart the Switch")
                 flush_logs(rt, fs)
                 return {ok = false, exhausted = true, logs = log_lines}
             end
@@ -533,7 +533,7 @@ function M.start_frame_runner()
                     return
                 end
                 if not safe_to_retry then
-                    buf_log("STOP: attempt cleanup could not verify retry safety; restart the game")
+                    buf_log("STOP: attempt cleanup could not verify retry safety; restart the Switch")
                     return finish_run()
                 end
                 if attempt < max_attempts then
@@ -542,7 +542,7 @@ function M.start_frame_runner()
                     phase = "setup"
                     flush_new_lines()
                 else
-                    buf_log("STOP: reached max attempts (" .. max_attempts .. ") without promotion; restart the game")
+                    buf_log("STOP: reached max attempts (" .. max_attempts .. ") without promotion; restart the Switch")
                     return finish_run()
                 end
 
