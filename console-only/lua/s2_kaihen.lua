@@ -31,9 +31,6 @@ M.SD_MANIFEST = {
     lib       = {path = "/kaihen/lib/libounce.so.1", size = 2351104, optional = true},
 }
 
--- ---------------------------------------------------------------------------
--- 1. Pure Builders: TryWait Adapter, NRO0 Image & 432-Byte BootstrapArgs
--- ---------------------------------------------------------------------------
 -- 24-byte TryWait adapter:
 --   0x927df000: and x0, x0, #~7
 --   0x58000070: ldr x16, .+0x10
@@ -263,7 +260,6 @@ function M.run_kaihen(rt, fs, log_fn)
         return {str = full, size = fsize}
     end
 
-    -- Auto-relocate extracted kaiHEN release folder on SD root if needed
     local function verify_and_relocate_sd()
         local sdh = open_sd_card()
         local skip_probe = fs.ipc_get_entry_type(sdh, "/kaihen/civswitchfs-skipcheck", 0x301)
@@ -280,32 +276,50 @@ function M.run_kaihen(rt, fs, log_fn)
             return miss
         end
 
+        local function file_size(path_str)
+            local fh = fs.ipc_open_file(sdh, path_str, 1, 0x301)
+            if fh == 0 then return nil end
+            local size = fs.ipc_file_get_size(fh)
+            rt.close_handle(fh)
+            return size
+        end
+
         local missing = find_missing()
-        if #missing > 0 then
-            local rel_sources = {
-                bootstrap = {"bootstrap.bin"},
-                ro        = {"ro"},
-                hen       = {"sdcard/kaihen/bin/hen/main", "hen"},
-                game      = {"sdcard/kaihen/bin/game/main", "game"},
-                hbmenu    = {"sdcard/hbmenu.nro", "hbmenu.nro"},
-                programs  = {"sdcard/switch/ounceshell.nro", "programs/ounceshell.nro"},
-                lib       = {"sdcard/kaihen/lib", "lib"},
-            }
-            local cand_roots = {"", "/kaihen"}
-            local root_list = fs.ipc_list_directory(sdh, "/", 3)
-            for _, entry in ipairs(root_list.entries or {}) do
-                if entry.type == 0 and entry.name:lower():sub(1, 6) == "kaihen" and entry.name:lower() ~= "kaihen" then
-                    cand_roots[#cand_roots + 1] = "/" .. entry.name
-                end
+        local rel_sources = {
+            bootstrap = {"bootstrap.bin"},
+            ro        = {"ro"},
+            hen       = {"sdcard/kaihen/bin/hen", "hen"},
+            game      = {"sdcard/kaihen/bin/game", "game"},
+            hbmenu    = {"sdcard/hbmenu.nro", "hbmenu.nro"},
+            programs  = {"sdcard/switch/ounceshell.nro", "programs/ounceshell.nro"},
+            lib       = {"sdcard/kaihen/lib", "lib"},
+        }
+        local cand_roots = {""}
+        local root_list = fs.ipc_list_directory(sdh, "/", 3)
+        for _, entry in ipairs(root_list.entries or {}) do
+            if entry.type == 0 and entry.name:lower():sub(1, 6) == "kaihen" and entry.name:lower() ~= "kaihen" then
+                cand_roots[#cand_roots + 1] = "/" .. entry.name
             end
-            for _, cand_root in ipairs(cand_roots) do
-                local bp = fs.ipc_get_entry_type(sdh, cand_root .. "/bootstrap.bin", 0x301)
-                if bp.transport == 0 and bp.result == 0 then
+        end
+        cand_roots[#cand_roots + 1] = "/kaihen"
+        for _, cand_root in ipairs(cand_roots) do
+            local bp = fs.ipc_get_entry_type(sdh, cand_root .. "/bootstrap.bin", 0x301)
+            if bp.transport == 0 and bp.result == 0 then
+                local src_ro = file_size(cand_root .. "/ro/main")
+                local dst_ro = file_size(M.SD_MANIFEST.ro.path)
+                local to_update = missing
+                if src_ro and src_ro ~= dst_ro then
+                    to_update = {}
+                    for name in pairs(M.SD_MANIFEST) do
+                        to_update[#to_update + 1] = name
+                    end
+                end
+                if #to_update > 0 then
                     fs.ipc_create_directory(sdh, "/kaihen")
                     fs.ipc_create_directory(sdh, "/kaihen/bin")
                     fs.ipc_create_directory(sdh, "/kaihen/lib")
                     fs.ipc_create_directory(sdh, "/switch")
-                    for _, mname in ipairs(missing) do
+                    for _, mname in ipairs(to_update) do
                         local srcs = rel_sources[mname]
                         local dst = M.SD_MANIFEST[mname].path
                         if srcs and dst then
@@ -319,6 +333,7 @@ function M.run_kaihen(rt, fs, log_fn)
                                 local sp = fs.ipc_get_entry_type(sdh, from_p, 0x301)
                                 if sp.type == 0 then
                                     local dst_dir = dst:match("^(.*)/[^/]+$")
+                                    fs.ipc_delete_directory_recursively(sdh, dst_dir)
                                     rt.wr_str(slots.path, from_p)
                                     rt.wr_str(slots.info, dst_dir)
                                     local r_pkt = P.packet(6, "", {
@@ -327,17 +342,18 @@ function M.run_kaihen(rt, fs, log_fn)
                                     })
                                     fs.send_packet(sdh, r_pkt, slots.pkt)
                                 elseif from_p ~= dst then
+                                    fs.ipc_delete_file(sdh, dst)
                                     fs.ipc_rename_file(sdh, from_p, dst, 0x301, 0x301)
                                 end
                             end
                         end
                     end
                     fs.ipc_commit(sdh)
-                    break
                 end
+                break
             end
-            missing = find_missing()
         end
+        missing = find_missing()
 
         local req_missing = {}
         for _, mname in ipairs(missing) do
@@ -351,7 +367,6 @@ function M.run_kaihen(rt, fs, log_fn)
         kh_log("SD manifest verified")
     end
 
-    -- Re-arm retained two-bucket endpoint
     local ep_read_buf  = arena_alloc(0x4000)
     local ep_write_buf = arena_alloc(0x4000)
     local ep = {

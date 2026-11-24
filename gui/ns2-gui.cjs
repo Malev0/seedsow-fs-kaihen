@@ -968,6 +968,14 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
         return send(500, JSON.stringify({ok: false, error: error.message}));
       }
     }
+    if (req.method === 'GET' && url.pathname === '/api/kaihen/status') {
+      try {
+        const result = await KAIHEN_RELEASE.status();
+        return send(200, JSON.stringify(result));
+      } catch (error) {
+        return send(200, JSON.stringify({ok: false, error: error.message, upToDate: null}));
+      }
+    }
     if (req.method === 'POST' && url.pathname === '/api/kaihen/latest') {
       if (runActive())
         return send(409, JSON.stringify({ok: false,

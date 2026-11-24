@@ -60,6 +60,13 @@
   #restart { background: #2b2450; border-color: #453a7a; color: #e9e3ff; }
   #failed { background: #4a2020; border-color: #6b2d2d; color: #fee2e2; }
   .buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+  .kaihen-banner {
+    display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+    background: #2b2410; border-bottom: 1px solid #4a3d16; color: #fde8c8;
+    font-size: 13px;
+  }
+  .kaihen-banner .spacer { flex: 1; }
+  #kaihenBannerDownload { background: #4a3a12; border-color: #6b551d; color: #fde8c8; }
   .toggle {
     display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
     font-size: 12.5px; color: var(--muted); border: 1px solid var(--line);
@@ -182,6 +189,12 @@
     </span>
   </span>
 </header>
+
+<div id="kaihenBanner" class="kaihen-banner" style="display:none">
+  <span id="kaihenBannerText"></span>
+  <span class="spacer"></span>
+  <button id="kaihenBannerDownload" class="small">Download kaiHEN</button>
+</div>
 
 <main>
   <section id="pane-exploit" class="pane active">
@@ -513,6 +526,7 @@ $('kaihenUpdate').addEventListener('click', () => {
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { addLine(`[gui] kaiHEN update incomplete: ${j.error || res.status}`); return; }
       addLine(`[gui] kaiHEN updated: ${j.files.join(', ')}`);
+      await checkKaihen(true);
     } catch (error) {
       addLine(`[gui] kaiHEN update failed: ${error.message}`);
     }
@@ -524,8 +538,60 @@ $('kaihenReleases').addEventListener('click', () => {
   window.open('https://github.com/ouncebrew/kaihen/releases', '_blank', 'noopener');
 });
 
-$('kaihenAuto').addEventListener('click', async () => {
-  const button = $('kaihenAuto');
+let kaihenStatus = null;
+let kaihenCheckedAt = 0;
+let kaihenLoggedTag = null;
+
+function updateKaihenBanner(status) {
+  const banner = $('kaihenBanner');
+  const text = $('kaihenBannerText');
+  const button = $('kaihenBannerDownload');
+  if (status?.ok && status.upToDate) {
+    banner.style.display = 'none';
+    if (kaihenLoggedTag !== status.latest.tag) {
+      kaihenLoggedTag = status.latest.tag;
+      addLine(`[gui] kaiHEN ${status.latest.tag} is installed.`);
+    }
+    return;
+  }
+  if (status?.ok && !status.upToDate) {
+    const installed = status.local?.tag || 'no release';
+    text.textContent = `kaiHEN ${status.latest.tag} is available (installed: ${installed}).`;
+    button.textContent = `Download kaiHEN ${status.latest.tag}`;
+    button.disabled = false;
+    banner.style.display = 'flex';
+    return;
+  }
+  if (status?.local && !status.local.tag) {
+    text.textContent = 'No kaiHEN release is installed. Download the latest release before starting.';
+    button.textContent = 'Download kaiHEN';
+    button.disabled = false;
+    banner.style.display = 'flex';
+    return;
+  }
+  banner.style.display = 'none';
+}
+
+async function checkKaihen(force = false) {
+  if (!force && kaihenStatus && Date.now() - kaihenCheckedAt < 5 * 60 * 1000) {
+    updateKaihenBanner(kaihenStatus);
+    return kaihenStatus;
+  }
+  try {
+    const res = await fetch('/api/kaihen/status');
+    const j = await res.json().catch(() => ({}));
+    kaihenStatus = j;
+    kaihenCheckedAt = Date.now();
+    updateKaihenBanner(j);
+    if (!j.ok) addLine(`[gui] kaiHEN check failed: ${j.error || res.status}`);
+    return j;
+  } catch (error) {
+    addLine(`[gui] kaiHEN check failed: ${error.message}`);
+    return null;
+  }
+}
+
+async function downloadLatestKaihen(button) {
   button.disabled = true;
   addLine('[gui] kaiHEN: downloading the latest release ...');
   try {
@@ -533,12 +599,16 @@ $('kaihenAuto').addEventListener('click', async () => {
     const j = await res.json().catch(() => ({}));
     if (!res.ok) { addLine(`[gui] kaiHEN auto-update: ${j.error || res.status}`); return; }
     addLine(`[gui] kaiHEN ${j.tag}: ${j.count} file(s) copied into kaihen/`);
+    await checkKaihen(true);
   } catch (error) {
     addLine(`[gui] kaiHEN auto-update failed: ${error.message}`);
   } finally {
     button.disabled = false;
   }
-});
+}
+
+$('kaihenAuto').addEventListener('click', () => downloadLatestKaihen($('kaihenAuto')));
+$('kaihenBannerDownload').addEventListener('click', () => downloadLatestKaihen($('kaihenBannerDownload')));
 
 $('consoleOnlyUpload').addEventListener('click', async () => {
   const button = $('consoleOnlyUpload');
@@ -564,7 +634,7 @@ $('prepareSd').addEventListener('click', async () => {
     const res = await fetch('/api/prepare-sd', {method: 'POST'});
     const j = await res.json().catch(() => ({}));
     if (!res.ok || j.ok === false) addLine(`[gui] Prepare SD failed: ${j.error || j.code || res.status}`);
-    else addLine('[gui] SD card prepared.');
+    else { addLine('[gui] SD card prepared.'); await checkKaihen(true); }
   } catch (error) {
     addLine(`[gui] Prepare SD failed: ${error.message}`);
   } finally {
@@ -674,7 +744,13 @@ $('holdMs').addEventListener('change', () => {
 function aPresses() { return $('atwice').checked ? 2 : 1; }
 function yDelayMs() { return Math.min(60000, Math.max(0, Number($('ydelay').value) || 0)); }
 
-$('start').addEventListener('click', () => {
+$('start').addEventListener('click', async () => {
+  const status = await checkKaihen();
+  if (status?.ok && (!status.upToDate || !status.local?.tag)) {
+    addLine('[gui] update kaiHEN before starting this boot.');
+    updateKaihenBanner(status);
+    return;
+  }
   logEl.innerHTML = '';
   const attempts = $('autoRetry').checked
     ? Math.min(20, Math.max(1, Number($('autoAttempts').value) || 6)) : 1;
@@ -882,6 +958,7 @@ async function catchUp() {
 setInterval(catchUp, 2000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) catchUp(); });
 catchUp();
+checkKaihen();
 </script>
 </body>
 </html>

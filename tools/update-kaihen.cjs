@@ -47,14 +47,22 @@ function copyTree(from, to, files) {
   }
 }
 
-function update(source) {
+function writeMarker(meta = {}) {
+  fs.mkdirSync(target, {recursive: true});
+  const marker = {...meta, installedAt: new Date().toISOString()};
+  fs.writeFileSync(path.join(target, 'release.json'), JSON.stringify(marker, null, 2) + '\n');
+  return marker;
+}
+
+function update(source, meta = {}) {
   const dir = checkDir(source);
   const files = [];
   copyTree(dir, target, files);
+  writeMarker({...meta, source: dir});
   return {source: dir, target, files, count: files.length};
 }
 
-module.exports = {update, checkDir, required, isRelease};
+module.exports = {update, checkDir, required, isRelease, writeMarker};
 
 if (require.main === module) {
   try {

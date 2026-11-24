@@ -109,6 +109,11 @@ If you set up the card by hand, extract the release ZIP to the SD card root
 `sdcard/` into place on the first run), or copy the contents of `sdcard/` to
 the root and put `ro/main` and `bootstrap.bin` in `/kaihen/bin/`.
 
+Running the exploit also updates the card. If an extracted release folder with
+`bootstrap.bin` and `ro/` is on the card, the console-only port copies it into
+`/kaihen/` and `/switch/` when the installed `ro/main` differs from the
+release's. The PC flow stages the release's `sdcard/` tree on every run.
+
 The shared libraries in `kaihen/lib` are required by dynamically linked
 homebrew. The kit stages the release's `sdcard/` folder itself, so the PC flow
 does not need a separate ns2jb checkout; the bundled engine already handles

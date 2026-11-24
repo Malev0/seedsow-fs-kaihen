@@ -87,6 +87,12 @@ later**, which copies the release's `sdcard/` folder. This kit implements that
 staging itself, so a separate ns2jb checkout is not needed; if you use upstream
 ns2jb directly, update it to `ae33da1` or later.
 
+On startup, the controller checks `kaihen/` against the latest GitHub release
+using the installed release marker or the key-file hashes. If the release is
+missing or older, a banner at the top offers a download button, and **Start**
+waits until the latest release is installed when the check succeeds. If GitHub
+cannot be reached, the check does not block the run.
+
 ### Updating this kit
 
 **GUI:** press **Check for updates**. If a newer integer version exists, a
@@ -188,6 +194,11 @@ folder to the card root and then adds `ro/main` and `bootstrap.bin` under
 `kaihen/lib` libraries are required by dynamically linked homebrew. Existing
 files with the same names are replaced. The full console-only instructions are
 in [`console-only/README.md`](console-only/README.md).
+
+Running the exploit also updates the card. The PC flow stages the release's
+`sdcard/` tree on every run. The console-only port copies an extracted release
+folder on the card into `/kaihen/` and `/switch/` when the installed `ro/main`
+differs from the release's.
 
 ## Command line
 
