@@ -79,7 +79,8 @@ function pickFolder() {
 
 function copyFile(source, target) {
   if (!fs.existsSync(source)) return false;
-  fs.mkdirSync(path.dirname(target), {recursive: true});
+  const parent = path.dirname(target);
+  if (!fs.existsSync(parent)) fs.mkdirSync(parent, {recursive: true});
   fs.copyFileSync(source, target);
   log('  ' + target);
   return true;
@@ -87,8 +88,14 @@ function copyFile(source, target) {
 
 function copyTree(source, target) {
   if (!fs.existsSync(source)) return;
-  fs.cpSync(source, target, {recursive: true, force: true});
-  log('  ' + target + path.sep);
+  if (!fs.existsSync(target)) fs.mkdirSync(target, {recursive: true});
+  for (const entry of fs.readdirSync(source, {withFileTypes: true})) {
+    if (entry.name.startsWith('.')) continue;
+    const from = path.join(source, entry.name);
+    const to = path.join(target, entry.name);
+    if (entry.isDirectory()) copyTree(from, to);
+    else if (entry.isFile()) copyFile(from, to);
+  }
 }
 
 function copyRelease(target) {
