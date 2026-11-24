@@ -468,10 +468,10 @@ async function poller() {
   }
 }
 
-function runStream(file, args, {cwd, env, prefix, timeoutMs, ipc, onMessage}) {
+function runStream(file, args, {cwd, env, prefix, timeoutMs, ipc, onMessage, windowsHide = true}) {
   return new Promise(resolve => {
     addLine(`${prefix}$ ${path.basename(file)} ${args.join(' ')}`);
-    const options = {cwd: cwd || ROOT, env: env || process.env, windowsHide: true};
+    const options = {cwd: cwd || ROOT, env: env || process.env, windowsHide};
     // The held-RPC pipeline needs an IPC channel to report `held-ready` and to
     // receive `{type:'release'}` when the user retires the endpoint.
     if (ipc) options.stdio = ['ignore', 'pipe', 'pipe', 'ipc'];
@@ -961,7 +961,7 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
       addLine('[gui] Prepare SD: choose the SD card root in the folder dialog ...');
       try {
         const code = await runStream('node', [path.join(TOOLS, 'prepare-sd.cjs')],
-          {cwd: ROOT, env: {...process.env}, prefix: '[sd] '});
+          {cwd: ROOT, env: {...process.env}, prefix: '[sd] ', windowsHide: false});
         return send(code === 0 ? 200 : 500, JSON.stringify({ok: code === 0, code}));
       } catch (error) {
         addLine(`[gui] Prepare SD failed: ${error.message}`);

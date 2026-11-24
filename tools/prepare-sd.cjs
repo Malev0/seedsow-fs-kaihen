@@ -40,13 +40,22 @@ function pickFolder() {
   if (process.platform === 'win32') {
     const script = [
       'Add-Type -AssemblyName System.Windows.Forms',
+      '$owner = New-Object System.Windows.Forms.Form',
+      '$owner.TopMost = $true',
+      '$owner.ShowInTaskbar = $false',
+      "$owner.FormBorderStyle = 'None'",
+      '$owner.Width = 1; $owner.Height = 1',
+      "$owner.StartPosition = 'CenterScreen'",
+      '$owner.Opacity = 0.01',
+      '$owner.Show()',
       '$d = New-Object System.Windows.Forms.FolderBrowserDialog',
       "$d.Description = 'Select the SD card root (the folder containing Nintendo/switch)'",
       "$d.ShowNewFolderButton = $false",
-      "if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }",
+      "if ($d.ShowDialog($owner) -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }",
+      '$owner.Close()',
     ].join('; ');
     const out = execFileSync('powershell',
-      ['-NoProfile', '-STA', '-Command', script],
+      ['-NoProfile', '-STA', '-WindowStyle', 'Normal', '-Command', script],
       {encoding: 'utf8', windowsHide: false});
     return out.trim();
   }
