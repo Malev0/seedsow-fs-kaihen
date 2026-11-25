@@ -62,9 +62,13 @@ Without `--host`/`--ip`, the address comes from `NS2_CONSOLE` or
 > it, load the slot again, and only then press **A**. Pressing **A** on the
 > first launch can freeze.
 >
-> If the log says `STOP: ... restart the Switch`, power-cycle the console
-> before trying again. That message means the attempt cleanup could not verify
-> that a retry is safe.
+> **If an attempt stops without promotion:**
+>
+> - `STOP: retry unsafe!` — do **not** close the game from HOME or use a normal
+>   software restart. Hold the power button for **15 seconds** to force power
+>   off, so unretired cache state is not flushed to save storage.
+> - `STOP: reached max attempts ... restart the Switch` — all attempts cleaned
+>   up safely; restart the console before running again.
 
 Holding **MINUS** before **Y** still starts the stock HTTP server; the stock
 save files are untouched.

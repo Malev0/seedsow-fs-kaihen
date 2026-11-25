@@ -279,9 +279,7 @@ function M.run_kaihen(rt, fs, log_fn)
         local function file_size(path_str)
             local fh = fs.ipc_open_file(sdh, path_str, 1, 0x301)
             if fh == 0 then return nil end
-            local size = fs.ipc_file_get_size(fh)
-            rt.close_handle(fh)
-            return size
+            local sz = fs.ipc_file_get_size(fh); rt.close_handle(fh); return sz
         end
 
         local missing = find_missing()
@@ -305,19 +303,13 @@ function M.run_kaihen(rt, fs, log_fn)
         for _, cand_root in ipairs(cand_roots) do
             local bp = fs.ipc_get_entry_type(sdh, cand_root .. "/bootstrap.bin", 0x301)
             if bp.transport == 0 and bp.result == 0 then
-                local src_ro = file_size(cand_root .. "/ro/main")
-                local dst_ro = file_size(M.SD_MANIFEST.ro.path)
                 local to_update = missing
-                if src_ro and src_ro ~= dst_ro then
-                    to_update = {}
-                    for name in pairs(M.SD_MANIFEST) do
-                        to_update[#to_update + 1] = name
-                    end
+                if file_size(cand_root .. "/ro/main") then
+                    to_update = {}; for name in pairs(M.SD_MANIFEST) do to_update[#to_update + 1] = name end
                 end
                 if #to_update > 0 then
                     fs.ipc_create_directory(sdh, "/kaihen")
                     fs.ipc_create_directory(sdh, "/kaihen/bin")
-                    fs.ipc_create_directory(sdh, "/kaihen/lib")
                     fs.ipc_create_directory(sdh, "/switch")
                     for _, mname in ipairs(to_update) do
                         local srcs = rel_sources[mname]
@@ -333,14 +325,17 @@ function M.run_kaihen(rt, fs, log_fn)
                                 local sp = fs.ipc_get_entry_type(sdh, from_p, 0x301)
                                 if sp.type == 0 then
                                     local dst_dir = dst:match("^(.*)/[^/]+$")
-                                    fs.ipc_delete_directory_recursively(sdh, dst_dir)
+                                    if from_p == dst_dir then dst_dir = nil end
+                                    if dst_dir then
+                                        fs.ipc_delete_directory_recursively(sdh, dst_dir)
                                     rt.wr_str(slots.path, from_p)
                                     rt.wr_str(slots.info, dst_dir)
                                     local r_pkt = P.packet(6, "", {
                                         x = {{addr = slots.path, size = 0x301, index = 0},
                                              {addr = slots.info, size = 0x301, index = 1}}
                                     })
-                                    fs.send_packet(sdh, r_pkt, slots.pkt)
+                                        fs.send_packet(sdh, r_pkt, slots.pkt)
+                                    end
                                 elseif from_p ~= dst then
                                     fs.ipc_delete_file(sdh, dst)
                                     fs.ipc_rename_file(sdh, from_p, dst, 0x301, 0x301)

@@ -306,7 +306,7 @@ function M.run(opts)
                 break
             end
             if not res.safeToRetry then
-                buf_log("STOP: attempt cleanup could not verify retry safety; restart the Switch")
+                buf_log("STOP: retry unsafe! DO NOT close game; hold Power 15s to power off")
                 flush_logs(rt, fs)
                 return {ok = false, unsafeToRetry = true, logs = log_lines}
             end
@@ -533,7 +533,7 @@ function M.start_frame_runner()
                     return
                 end
                 if not safe_to_retry then
-                    buf_log("STOP: attempt cleanup could not verify retry safety; restart the Switch")
+                    buf_log("STOP: retry unsafe! DO NOT close game; hold Power 15s to power off")
                     return finish_run()
                 end
                 if attempt < max_attempts then
