@@ -511,9 +511,13 @@ $('kaihenUpdate').addEventListener('click', () => {
     const strip = paths.every(path => path.split('/')[0] === top) &&
       paths.some(path => path.includes('/'));
     addLine(`[gui] kaiHEN update: ${files.length} file(s)${strip ? ' from ' + top : ''} ...`);
+    let layout = null;
     try {
       for (let index = 0; index < files.length; index++) {
         const path = strip ? paths[index].split('/').slice(1).join('/') : paths[index];
+        if (path.startsWith('sdcard/')) layout = 'new';
+        else if (!layout && (path.startsWith('hen/') || path.startsWith('game/') ||
+          path.startsWith('programs/'))) layout = 'flat';
         const data = toBase64(await files[index].arrayBuffer());
         const res = await fetch('/api/kaihen/upload', {method: 'POST',
           headers: {'content-type': 'application/json'}, body: JSON.stringify({path, data})});
@@ -522,7 +526,9 @@ $('kaihenUpdate').addEventListener('click', () => {
         if (index === 0 || index === files.length - 1 || (index + 1) % 4 === 0)
           addLine(`[gui] kaiHEN: ${index + 1}/${files.length} ${j.path}`);
       }
-      const res = await fetch('/api/kaihen/validate', {method: 'POST'});
+      const res = await fetch('/api/kaihen/validate', {method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({layout, tag: kaihenStatus?.latest?.tag || null})});
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { addLine(`[gui] kaiHEN update incomplete: ${j.error || res.status}`); return; }
       addLine(`[gui] kaiHEN updated: ${j.files.join(', ')}`);
@@ -546,6 +552,9 @@ function updateKaihenBanner(status) {
   const banner = $('kaihenBanner');
   const text = $('kaihenBannerText');
   const button = $('kaihenBannerDownload');
+  const local = status?.local;
+  const valid = Boolean(local?.valid);
+  const latest = status?.latest?.tag || '';
   if (status?.ok && status.upToDate) {
     banner.style.display = 'none';
     if (kaihenLoggedTag !== status.latest.tag) {
@@ -554,17 +563,23 @@ function updateKaihenBanner(status) {
     }
     return;
   }
-  if (status?.ok && !status.upToDate) {
-    const installed = status.local?.tag || 'no release';
-    text.textContent = `kaiHEN ${status.latest.tag} is available (installed: ${installed}).`;
-    button.textContent = `Download kaiHEN ${status.latest.tag}`;
+  if (status?.ok && valid && local.tag) {
+    text.textContent = `kaiHEN ${latest} is available (installed: ${local.tag}).`;
+    button.textContent = `Download kaiHEN ${latest}`;
     button.disabled = false;
     banner.style.display = 'flex';
     return;
   }
-  if (status?.local && !status.local.tag) {
+  if (status?.ok && valid && !local.tag) {
+    text.textContent = `kaiHEN ${latest} is available; the installed release could not be identified.`;
+    button.textContent = `Download kaiHEN ${latest}`;
+    button.disabled = false;
+    banner.style.display = 'flex';
+    return;
+  }
+  if (local && !valid) {
     text.textContent = 'No kaiHEN release is installed. Download the latest release before starting.';
-    button.textContent = 'Download kaiHEN';
+    button.textContent = latest ? `Download kaiHEN ${latest}` : 'Download kaiHEN';
     button.disabled = false;
     banner.style.display = 'flex';
     return;
@@ -592,7 +607,29 @@ async function checkKaihen(force = false) {
 }
 
 async function downloadLatestKaihen(button) {
+  const original = button.textContent;
   button.disabled = true;
+  let timer = null;
+  let lastPercent = -1;
+  const poll = async () => {
+    try {
+      const res = await fetch('/api/kaihen/download-status');
+      const j = await res.json().catch(() => ({}));
+      if (!j.active) return;
+      if (j.phase === 'downloading') {
+        const pct = Math.max(0, Math.min(100, Number(j.percent) || 0));
+        if (pct !== lastPercent) {
+          lastPercent = pct;
+          button.textContent = `Downloading kaiHEN ${pct}%`;
+        }
+      } else if (j.phase === 'extracting') {
+        button.textContent = 'Extracting kaiHEN ...';
+      } else if (j.phase === 'installing') {
+        button.textContent = 'Installing kaiHEN ...';
+      }
+    } catch {}
+  };
+  timer = setInterval(poll, 500);
   addLine('[gui] kaiHEN: downloading the latest release ...');
   try {
     const res = await fetch('/api/kaihen/latest', {method: 'POST'});
@@ -603,7 +640,9 @@ async function downloadLatestKaihen(button) {
   } catch (error) {
     addLine(`[gui] kaiHEN auto-update failed: ${error.message}`);
   } finally {
+    if (timer) clearInterval(timer);
     button.disabled = false;
+    button.textContent = original;
   }
 }
 
@@ -746,11 +785,18 @@ function yDelayMs() { return Math.min(60000, Math.max(0, Number($('ydelay').valu
 
 $('start').addEventListener('click', async () => {
   const status = await checkKaihen();
-  if (status?.ok && (!status.upToDate || !status.local?.tag)) {
-    addLine('[gui] update kaiHEN before starting this boot.');
+  const local = status?.local;
+  const knownOutdated = Boolean(status?.ok && local?.tag && local.tag !== status.latest?.tag);
+  const missing = Boolean(local && !local.valid);
+  if (knownOutdated || missing) {
+    addLine(knownOutdated
+      ? '[gui] update kaiHEN before starting this boot.'
+      : '[gui] install kaiHEN before starting this boot.');
     updateKaihenBanner(status);
     return;
   }
+  if (status?.ok && local?.valid && !local?.tag)
+    addLine('[gui] kaiHEN version could not be identified; starting with the installed layout.');
   logEl.innerHTML = '';
   const attempts = $('autoRetry').checked
     ? Math.min(20, Math.max(1, Number($('autoAttempts').value) || 6)) : 1;

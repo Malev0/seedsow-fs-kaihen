@@ -20,8 +20,19 @@ function isFile(file) {
 function isRelease(dir) {
   if (!required.every(rel => isFile(path.join(dir, rel)))) return false;
   if (fs.statSync(path.join(dir, 'sdcard'), {throwIfNoEntry: false})?.isDirectory())
-    return true;
+    return ['sdcard/kaihen/bin/hen/main', 'sdcard/kaihen/bin/game/main']
+      .every(rel => isFile(path.join(dir, rel)));
   return ['hbmenu.nro', 'hen/main', 'game/main'].every(rel => isFile(path.join(dir, rel)));
+}
+
+function isLayout(dir, layout) {
+  if (!required.every(rel => isFile(path.join(dir, rel)))) return false;
+  if (layout === 'new')
+    return ['sdcard/kaihen/bin/hen/main', 'sdcard/kaihen/bin/game/main']
+      .every(rel => isFile(path.join(dir, rel)));
+  if (layout === 'flat')
+    return ['hbmenu.nro', 'hen/main', 'game/main'].every(rel => isFile(path.join(dir, rel)));
+  return isRelease(dir);
 }
 
 function checkDir(source) {
@@ -30,7 +41,7 @@ function checkDir(source) {
   if (!fs.statSync(dir, {throwIfNoEntry: false})?.isDirectory())
     throw Error(`not a folder: ${dir}`);
   if (!isRelease(dir))
-    throw Error(`${dir} is not a kaiHEN release (missing bootstrap.bin, ro/main, or the sdcard/ folder)`);
+    throw Error(`${dir} is not a kaiHEN release (missing bootstrap.bin, ro/main, or the hen/game files)`);
   return dir;
 }
 
@@ -54,15 +65,29 @@ function writeMarker(meta = {}) {
   return marker;
 }
 
+function removeLayout(dir, layout) {
+  const paths = layout === 'new'
+    ? ['hen', 'game', 'hbmenu.nro']
+    : layout === 'flat' ? ['sdcard'] : [];
+  for (const rel of paths)
+    fs.rmSync(path.join(dir, rel), {recursive: true, force: true});
+}
+
 function update(source, meta = {}) {
   const dir = checkDir(source);
+  const sourceNew = fs.statSync(path.join(dir, 'sdcard'), {throwIfNoEntry: false})?.isDirectory();
+  removeLayout(target, sourceNew ? 'new' : 'flat');
   const files = [];
   copyTree(dir, target, files);
   writeMarker({...meta, source: dir});
   return {source: dir, target, files, count: files.length};
 }
 
-module.exports = {update, checkDir, required, isRelease, writeMarker};
+function clearMarker() {
+  try { fs.rmSync(path.join(target, 'release.json'), {force: true}); } catch {}
+}
+
+module.exports = {update, checkDir, required, isRelease, isLayout, writeMarker, clearMarker, removeLayout};
 
 if (require.main === module) {
   try {

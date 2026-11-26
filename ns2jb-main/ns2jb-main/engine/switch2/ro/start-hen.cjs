@@ -82,7 +82,7 @@ function makeBootstrapImage(text) {
   return image;
 }
 
-async function main(imagePath, bootstrapPath, gameMainPath, programs = []) {
+async function main(imagePath, bootstrapPath, gameMainPath, programs = [], cleanup = []) {
   let text = fs.readFileSync(bootstrapPath);
   // Append the try-wait adapter right after the bootstrap text (16-byte aligned)
   // and point the bootstrap's pthread_trywait slot at it below.
@@ -158,6 +158,14 @@ async function main(imagePath, bootstrapPath, gameMainPath, programs = []) {
   // FS session. kaiHEN's compiled bootstrap/HEN hardcode the /kaihen paths.
   const stage = (target, source) => memory.request({command: 'root-native-file-stage',
     root: fsRoot, target, source});
+  for (const target of cleanup) {
+    try {
+      console.log(`Removing ${target}`);
+      await memory.request({command: 'root-native-directory-delete', root: fsRoot, target});
+    } catch (error) {
+      console.log(`Cleanup ${target} skipped: ${error.message}`);
+    }
+  }
   let joined = false;
   try {
     let stagedMenu = null;

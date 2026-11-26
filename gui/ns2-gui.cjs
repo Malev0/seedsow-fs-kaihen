@@ -60,6 +60,8 @@ const state = {
   lines: [],
 };
 
+let kaihenDownload = {active: false, phase: 'idle', received: 0, total: 0, percent: 0, error: null};
+
 // Ordered pipeline plan (pipeline.cjs); used to turn "N stages done" into a
 // percentage for the RO and process lanes. Stage 2 gets its percentage from the
 // probe report itself.
@@ -177,6 +179,13 @@ function releasePipeline(reason, ok = false) {
 function runActive() {
   return state.phase === 'setup' || state.phase === 'running' ||
     state.phase === 'restarting' || pipelineHeld || Boolean(child);
+}
+
+// kaiHEN updates only need to avoid a real run. A Prepare SD picker (child)
+// must not make the update buttons look dead.
+function runBusy() {
+  return busy || autoRunning || pipelineHeld ||
+    state.phase === 'setup' || state.phase === 'running' || state.phase === 'restarting';
 }
 
 function publicState() {
@@ -926,9 +935,21 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
       }
     }
     if (req.method === 'POST' && url.pathname === '/api/kaihen/validate') {
+      let body = {};
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch {}
       try {
-        const {checkDir} = require(path.join(TOOLS, 'update-kaihen.cjs'));
+        const {checkDir, clearMarker, isLayout, removeLayout, writeMarker} =
+          require(path.join(TOOLS, 'update-kaihen.cjs'));
+        if (body.layout && !isLayout(KAIHEN, body.layout))
+          throw Error(`incomplete ${body.layout} kaiHEN layout`);
+        if (body.layout) removeLayout(KAIHEN, body.layout);
+        clearMarker();
         checkDir(KAIHEN);
+        if (body.layout) {
+          const local = KAIHEN_RELEASE.localRelease();
+          const tag = local.tag || body.tag;
+          if (tag) writeMarker({tag, name: 'local update', source: 'local'});
+        }
         const files = ['bootstrap.bin', 'ro/main'];
         if (fs.statSync(path.join(KAIHEN, 'sdcard'), {throwIfNoEntry: false})?.isDirectory())
           files.push('sdcard/');
@@ -968,6 +989,9 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
         return send(500, JSON.stringify({ok: false, error: error.message}));
       }
     }
+    if (req.method === 'GET' && url.pathname === '/api/kaihen/download-status') {
+      return send(200, JSON.stringify(kaihenDownload));
+    }
     if (req.method === 'GET' && url.pathname === '/api/kaihen/status') {
       try {
         const result = await KAIHEN_RELEASE.status();
@@ -977,15 +1001,38 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
       }
     }
     if (req.method === 'POST' && url.pathname === '/api/kaihen/latest') {
-      if (runActive())
+      if (kaihenDownload.active)
+        return send(409, JSON.stringify({ok: false,
+          error: 'A kaiHEN download is already running.'}));
+      if (runBusy())
         return send(409, JSON.stringify({ok: false,
           error: 'A run is active; stop it before updating kaiHEN.'}));
       addLine('[gui] kaiHEN: checking the latest release ...');
+      kaihenDownload = {active: true, phase: 'downloading', received: 0, total: 0,
+        percent: 0, error: null};
+      let lastPercent = -1;
       try {
-        const result = await KAIHEN_RELEASE.updateFromLatest();
+        const result = await KAIHEN_RELEASE.updateFromLatest({
+          onProgress: progress => {
+            const percent = Number(progress.percent) || 0;
+            kaihenDownload = {active: true, phase: progress.phase || 'downloading',
+              received: Number(progress.received) || 0,
+              total: Number(progress.total) || 0, percent, error: null};
+            if (progress.phase === 'downloading' && percent >= lastPercent + 10) {
+              lastPercent = percent - (percent % 10);
+              addLine(`[gui] kaiHEN download: ${percent}%`);
+            }
+          }
+        });
+        kaihenDownload = {active: false, phase: 'done',
+          received: kaihenDownload.received, total: kaihenDownload.total,
+          percent: 100, error: null};
         addLine(`[gui] kaiHEN ${result.tag}: ${result.count} file(s) copied into kaihen/`);
         return send(200, JSON.stringify({ok: true, ...result}));
       } catch (error) {
+        kaihenDownload = {active: false, phase: 'error',
+          received: kaihenDownload.received, total: kaihenDownload.total,
+          percent: 0, error: error.message};
         addLine(`[gui] kaiHEN auto-update failed: ${error.message}`);
         return send(500, JSON.stringify({ok: false, error: error.message}));
       }

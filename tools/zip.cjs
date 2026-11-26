@@ -20,11 +20,54 @@ async function download(url, destination, options = {}) {
   });
   if (!response.ok)
     throw Error(`download failed: HTTP ${response.status} ${response.statusText} (${url})`);
-  const bytes = Buffer.from(await response.arrayBuffer());
   fs.mkdirSync(path.dirname(destination), {recursive: true});
-  fs.writeFileSync(destination, bytes);
-  return {url, file: destination, bytes: bytes.length,
-    sha256: crypto.createHash('sha256').update(bytes).digest('hex')};
+  let total = Number(response.headers.get('content-length')) || Number(options.totalHint) || 0;
+  const hash = crypto.createHash('sha256');
+  let received = 0;
+  const progress = () => {
+    if (typeof options.onProgress === 'function')
+      options.onProgress({phase: 'downloading', received, total,
+        percent: total ? Math.min(100, Math.round(received / total * 100)) : 0});
+  };
+
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    const bytes = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(destination, bytes);
+    hash.update(bytes);
+    received = bytes.length;
+    if (!total) total = received;
+    progress();
+    return {url, file: destination, bytes: received, sha256: hash.digest('hex')};
+  }
+
+  const out = fs.createWriteStream(destination);
+  const reader = response.body.getReader();
+  try {
+    for (;;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      received += chunk.length;
+      hash.update(chunk);
+      if (!out.write(chunk)) {
+        await new Promise((resolve, reject) => {
+          const onDrain = () => { out.off('error', onError); resolve(); };
+          const onError = error => { out.off('drain', onDrain); reject(error); };
+          out.once('drain', onDrain);
+          out.once('error', onError);
+        });
+      }
+      progress();
+    }
+    await new Promise((resolve, reject) => {
+      out.once('error', reject);
+      out.end(resolve);
+    });
+  } catch (error) {
+    out.destroy();
+    throw error;
+  }
+  return {url, file: destination, bytes: received, sha256: hash.digest('hex')};
 }
 
 async function getJson(url, options = {}) {

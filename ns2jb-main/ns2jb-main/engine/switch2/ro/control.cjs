@@ -58,6 +58,8 @@ async function dispatch(context, request) {
   }
   if (command === 'file-stage' || command.startsWith('package-'))
     return require("./package.cjs").dispatch(context, request, state, domain);
+  if (command === 'directory-delete')
+    return require("./package.cjs").deleteDirectory(context, domain, Number(request.root), request.target);
   if (command.startsWith('code-') || command.startsWith('file-') || command.startsWith('donor-'))
     return require("./files.cjs").dispatch(context, request, state, domain);
   if (command === 'ncm-list-system' || command === 'ncm-list')

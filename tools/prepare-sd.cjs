@@ -112,7 +112,14 @@ function copyRelease(target) {
     return;
   }
   // Older flat release: mirror the local kaihen folder, then place the
-  // documented SD layout too.
+  // documented SD layout too. Remove the new-layout shared libraries and
+  // sdcard mirror so the card does not keep stale 20261123 files.
+  for (const stale of ['lib', 'sdcard']) {
+    const pathName = path.join(target, 'kaihen', stale);
+    if (!fs.existsSync(pathName)) continue;
+    fs.rmSync(pathName, {recursive: true, force: true});
+    log('  removed ' + pathName);
+  }
   copyTree(KAIHEN, path.join(target, 'kaihen'));
   copyFile(path.join(KAIHEN, 'hbmenu.nro'), path.join(target, 'hbmenu.nro'));
   for (const relative of ['bootstrap.bin', 'ro/main', 'hen/main', 'game/main'])

@@ -92,7 +92,7 @@ async function main() {
     if (!fs.statSync(ship(file), {throwIfNoEntry: false})?.isFile())
       throw Error('Missing kaihen/' + file);
   }
-  let henPath, gamePath, menuPath, programs;
+  let henPath, gamePath, menuPath, programs, cleanup = [];
   const sdcard = sdcardLayout(SHIP);
   if (sdcard) {
     henPath = path.join(sdcard.root, 'kaihen', 'bin', 'hen', 'main');
@@ -116,6 +116,7 @@ async function main() {
     programs = fs.readdirSync(ship('programs'), {withFileTypes: true})
       .filter(entry => entry.isFile() && !entry.name.startsWith('.'))
       .map(entry => ({source: ship('programs', entry.name), target: `/switch/${entry.name}`}));
+    cleanup = ['/kaihen/lib'];
   }
   if (fs.statSync(menuPath, {throwIfNoEntry: false})?.isFile())
     process.env.HBMENU_NRO = menuPath;
@@ -124,7 +125,7 @@ async function main() {
   console.log('Staging HEN to SD and starting it through ldr:ro...');
   // The fourth main stage of a HEN boot; the pipeline covers 1-3.
   announce('[ns2jb] stage 4: HEN');
-  const started = await startHen(henPath, ship('bootstrap.bin'), gamePath, programs);
+  const started = await startHen(henPath, ship('bootstrap.bin'), gamePath, programs, cleanup);
   console.log(JSON.stringify({started, ship: SHIP}, null, 2));
   // The console RPC loop is still running here - the detach below is what stops
   // it - so this is the last moment a banner can reach the screen. If the retire

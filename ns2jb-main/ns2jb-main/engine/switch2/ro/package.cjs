@@ -239,4 +239,28 @@ async function dispatch(context, request, state, domain) {
   throw Error('Unknown package operation');
 }
 
-module.exports = {dispatch, packagePath, stageFile};
+async function deleteDirectory(context, domain, root, target) {
+  const {s} = context;
+  const opened = await s.ipc('Open SD filesystem', root, 18);
+  check(!opened.result, `SD filesystem open failed: ${opened.canonicalResult}`);
+  const sd = domain.oneHandle(opened);
+  async function remove(pathName) {
+    let entries;
+    try { entries = await filesystem.listDirectory(s, sd, pathName, 512); }
+    catch { return; }
+    for (const entry of entries) {
+      const child = pathName.replace(/\/$/, '') + '/' + entry.name;
+      if (entry.type === 0) await remove(child);
+      else await pathCall(context, domain, sd, 1, child).catch(() => {});
+    }
+    await pathCall(context, domain, sd, 3, pathName).catch(() => {});
+  }
+  try {
+    await remove(target);
+    await s.ipc('Commit SD cleanup', sd, 10).catch(() => {});
+  } finally {
+    await s.close(sd);
+  }
+}
+
+module.exports = {dispatch, packagePath, stageFile, deleteDirectory};
