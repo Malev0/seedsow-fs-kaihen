@@ -285,7 +285,7 @@ function M.run_kaihen(rt, fs, log_fn)
         local missing = find_missing()
         local rel_sources = {
             bootstrap = {"bootstrap.bin"},
-            ro        = {"ro"},
+            ro        = {"sdcard/kaihen/bin/ro", "ro"},
             hen       = {"sdcard/kaihen/bin/hen", "hen"},
             game      = {"sdcard/kaihen/bin/game", "game"},
             hbmenu    = {"sdcard/hbmenu.nro", "hbmenu.nro"},
@@ -304,7 +304,7 @@ function M.run_kaihen(rt, fs, log_fn)
             local bp = fs.ipc_get_entry_type(sdh, cand_root .. "/bootstrap.bin", 0x301)
             if bp.transport == 0 and bp.result == 0 then
                 local to_update = missing
-                if file_size(cand_root .. "/ro/main") then
+                if file_size(cand_root .. "/ro/main") or file_size(cand_root .. "/sdcard/kaihen/bin/ro/main") then
                     to_update = {}; for name in pairs(M.SD_MANIFEST) do to_update[#to_update + 1] = name end
                 end
                 if #to_update > 0 then

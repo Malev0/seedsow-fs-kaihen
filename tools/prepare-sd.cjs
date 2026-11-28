@@ -105,6 +105,12 @@ function copyRelease(target) {
   const sdcard = path.join(KAIHEN, 'sdcard');
   if (fs.existsSync(sdcard)) {
     copyTree(sdcard, target);
+    // 20261128 moved OunceShell into switch/ounceshell/ounceshell.nro.
+    const oldProgram = path.join(target, 'switch', 'ounceshell.nro');
+    if (fs.existsSync(oldProgram)) {
+      fs.rmSync(oldProgram, {force: true});
+      log('  removed ' + oldProgram);
+    }
     // The console-only port reads these two from /kaihen/bin.
     copyFile(path.join(KAIHEN, 'ro', 'main'), path.join(target, 'kaihen', 'bin', 'ro', 'main'));
     copyFile(path.join(KAIHEN, 'bootstrap.bin'), path.join(target, 'kaihen', 'bin', 'bootstrap.bin'));

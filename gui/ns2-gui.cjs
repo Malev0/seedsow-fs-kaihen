@@ -938,13 +938,14 @@ const server = http.createServer(async (req, res) => {  const url = new URL(req.
       let body = {};
       try { body = JSON.parse((await readBody(req)) || '{}'); } catch {}
       try {
-        const {checkDir, clearMarker, isLayout, removeLayout, writeMarker} =
+        const {checkDir, clearMarker, isLayout, removeLayout, writeMarker, normalizeRelease} =
           require(path.join(TOOLS, 'update-kaihen.cjs'));
         if (body.layout && !isLayout(KAIHEN, body.layout))
           throw Error(`incomplete ${body.layout} kaiHEN layout`);
         if (body.layout) removeLayout(KAIHEN, body.layout);
         clearMarker();
         checkDir(KAIHEN);
+        normalizeRelease(KAIHEN);
         if (body.layout) {
           const local = KAIHEN_RELEASE.localRelease();
           const tag = local.tag || body.tag;

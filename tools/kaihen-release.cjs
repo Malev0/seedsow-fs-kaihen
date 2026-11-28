@@ -50,6 +50,12 @@ const KNOWN_RELEASES = {
     'hen/main': 'b4f161e36482d50de006b3caee909eb8413a42b6593a602324cface3d2a5ead9',
     'game/main': 'cd57628d91f11784085c858438fb392add20c6126bf7411c43d5a3dc83048874',
   },
+  '20261128': {
+    'bootstrap.bin': '5cc07ff55890d0653a826e9038bbedfb28ec9e7213f62380f5eeb3c543c79753',
+    'ro/main': 'cf0b7c22816b1b2edd4901f82dcedf61a6699ee050e6c4092ea0b32588c0d952',
+    'sdcard/kaihen/bin/hen/main': '607b33247c099ddad93f28e70b5cc73ca5a4c13911c1b5189e131e5e9ee0e8a1',
+    'sdcard/kaihen/bin/game/main': 'b988d45167ac52e1fa777fe71fcde1a21c92d29512f0540c1f7402a3462e161e',
+  },
 };
 
 function hasRelease(dir) {

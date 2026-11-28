@@ -11,28 +11,47 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const target = path.join(root, 'kaihen');
-const required = ['bootstrap.bin', 'ro/main'];
+const required = ['bootstrap.bin'];
 
 function isFile(file) {
   return Boolean(fs.statSync(file, {throwIfNoEntry: false})?.isFile());
 }
 
+// 20261128 moved ro/main into sdcard/kaihen/bin/ro/main; older releases and
+// the flat layout keep it at the release root.
+function hasRo(dir) {
+  return isFile(path.join(dir, 'ro', 'main')) ||
+    isFile(path.join(dir, 'sdcard', 'kaihen', 'bin', 'ro', 'main'));
+}
+
 function isRelease(dir) {
-  if (!required.every(rel => isFile(path.join(dir, rel)))) return false;
+  if (!required.every(rel => isFile(path.join(dir, rel))) || !hasRo(dir)) return false;
   if (fs.statSync(path.join(dir, 'sdcard'), {throwIfNoEntry: false})?.isDirectory())
     return ['sdcard/kaihen/bin/hen/main', 'sdcard/kaihen/bin/game/main']
       .every(rel => isFile(path.join(dir, rel)));
-  return ['hbmenu.nro', 'hen/main', 'game/main'].every(rel => isFile(path.join(dir, rel)));
+  return ['ro/main', 'hbmenu.nro', 'hen/main', 'game/main']
+    .every(rel => isFile(path.join(dir, rel)));
 }
 
 function isLayout(dir, layout) {
   if (!required.every(rel => isFile(path.join(dir, rel)))) return false;
   if (layout === 'new')
-    return ['sdcard/kaihen/bin/hen/main', 'sdcard/kaihen/bin/game/main']
-      .every(rel => isFile(path.join(dir, rel)));
+    return hasRo(dir) &&
+      ['sdcard/kaihen/bin/hen/main', 'sdcard/kaihen/bin/game/main']
+        .every(rel => isFile(path.join(dir, rel)));
   if (layout === 'flat')
-    return ['hbmenu.nro', 'hen/main', 'game/main'].every(rel => isFile(path.join(dir, rel)));
+    return ['ro/main', 'hbmenu.nro', 'hen/main', 'game/main']
+      .every(rel => isFile(path.join(dir, rel)));
   return isRelease(dir);
+}
+
+function normalizeRelease(dir) {
+  const sdcardRo = path.join(dir, 'sdcard', 'kaihen', 'bin', 'ro', 'main');
+  if (!isFile(sdcardRo)) return false;
+  const rootRo = path.join(dir, 'ro', 'main');
+  fs.mkdirSync(path.dirname(rootRo), {recursive: true});
+  fs.copyFileSync(sdcardRo, rootRo);
+  return true;
 }
 
 function checkDir(source) {
@@ -41,7 +60,7 @@ function checkDir(source) {
   if (!fs.statSync(dir, {throwIfNoEntry: false})?.isDirectory())
     throw Error(`not a folder: ${dir}`);
   if (!isRelease(dir))
-    throw Error(`${dir} is not a kaiHEN release (missing bootstrap.bin, ro/main, or the hen/game files)`);
+    throw Error(`${dir} is not a kaiHEN release (missing bootstrap.bin, ro/main or sdcard/kaihen/bin/ro/main, or the hen/game files)`);
   return dir;
 }
 
@@ -73,12 +92,19 @@ function removeLayout(dir, layout) {
     fs.rmSync(path.join(dir, rel), {recursive: true, force: true});
 }
 
+function clearManaged(dir) {
+  for (const rel of ['sdcard/kaihen/bin', 'sdcard/kaihen/lib', 'sdcard/kaihen/system.json'])
+    fs.rmSync(path.join(dir, rel), {recursive: true, force: true});
+}
+
 function update(source, meta = {}) {
   const dir = checkDir(source);
   const sourceNew = fs.statSync(path.join(dir, 'sdcard'), {throwIfNoEntry: false})?.isDirectory();
   removeLayout(target, sourceNew ? 'new' : 'flat');
+  if (sourceNew) clearManaged(target);
   const files = [];
   copyTree(dir, target, files);
+  normalizeRelease(target);
   writeMarker({...meta, source: dir});
   return {source: dir, target, files, count: files.length};
 }
@@ -87,7 +113,7 @@ function clearMarker() {
   try { fs.rmSync(path.join(target, 'release.json'), {force: true}); } catch {}
 }
 
-module.exports = {update, checkDir, required, isRelease, isLayout, writeMarker, clearMarker, removeLayout};
+module.exports = {update, checkDir, required, isRelease, isLayout, writeMarker, clearMarker, removeLayout, normalizeRelease, hasRo};
 
 if (require.main === module) {
   try {
